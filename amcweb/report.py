@@ -92,15 +92,24 @@ CSS = """
 .amcr .modal-h{font-size:1rem;font-weight:600;margin:0 0 4px;padding-right:28px}
 .amcr .modal-meta{font-size:.78rem;color:var(--muted);margin-bottom:16px}
 .amcr .section-label{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:14px}
+.amcr.amcr-loading > :not(.amcr-loader){visibility:hidden}
+.amcr .amcr-loader{display:none}
+.amcr.amcr-loading .amcr-loader{display:flex;flex-direction:column;align-items:center;gap:14px;
+  padding:60px 0;color:var(--muted);font-size:.9rem;position:absolute;left:0;right:0}
+.amcr.amcr-loading{position:relative;min-height:240px;max-height:240px;overflow:hidden}
+.amcr .spin{width:34px;height:34px;border-radius:50%;border:3px solid rgba(255,255,255,.12);
+  border-top-color:var(--accent);animation:amcrspin .8s linear infinite}
+@keyframes amcrspin{to{transform:rotate(360deg)}}
+.amcr .who-too:empty{display:none}
 .amcr .list-row{margin:-4px 0 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .amcr .who-too{font-size:.8rem;color:var(--new);font-weight:600}
 .amcr .goto-btn{background:var(--surface);color:var(--text);border:1px solid rgba(255,255,255,.15);
   border-radius:20px;padding:6px 14px;font-size:.78rem;cursor:pointer;font-family:inherit}
 .amcr .goto-btn:hover{border-color:var(--accent)}
-.amcr .card-foot{margin-top:auto;display:flex;align-items:stretch;border-top:1px solid var(--border)}
-.amcr .card-foot .dates-btn{margin-top:0;border-top:none;flex:1;min-width:0}
-.amcr .list-btn{flex:0 0 auto;width:34px;height:34px;margin:auto 10px auto 0;border-radius:50%;border:none;
-  font-size:1.25rem;font-weight:700;line-height:1;cursor:pointer;display:flex;align-items:center;
+.amcr .card-foot{margin-top:auto;position:relative;border-top:1px solid var(--border)}
+.amcr .card-foot .dates-btn{margin-top:0;border-top:none;width:100%}
+.amcr .list-btn{position:absolute;right:8px;bottom:6px;width:26px;height:26px;border-radius:50%;border:none;
+  font-size:1rem;font-weight:700;line-height:1;cursor:pointer;display:flex;align-items:center;
   justify-content:center;font-family:inherit;transition:transform .1s,filter .1s;padding:0}
 .amcr .list-btn:hover{filter:brightness(1.15)}
 .amcr .list-btn:active{transform:scale(.92)}
@@ -196,40 +205,23 @@ def _fmt_date(d):
         return _e(d)
 
 
-def _names(names):
-    names = [_e(n) for n in names]
-    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " &amp; " + names[-1]
-
-
-def _list_button(m, tracked, me):
-    """Green + (add me to the shared list) or red - (take me off). None = no button (downloaded file)."""
-    if tracked is None or not m.get("amc_movie_id"):
+def _list_button(m, interactive):
+    """Placeholder for the green + / red - button; the page script sets its state."""
+    if not interactive or not m.get("amc_movie_id"):
         return ""
-    users = tracked.get(m["amc_movie_id"]) or []
-    others = [u for u in users if u != me]
-    if me in users:
-        return ('<button class="list-btn remove" data-amcr-list="remove:{}" title="Remove from the shared list" '
-                'aria-label="Remove from list">&minus;</button>').format(m["amc_movie_id"])
-    tip = "Add to the shared list" + (" ({} has it)".format(", ".join(map(_e, others))) if others else "")
-    return ('<button class="list-btn add" data-amcr-list="add:{}" title="{}" '
-            'aria-label="Add to list">+</button>').format(m["amc_movie_id"], tip)
+    return '<button class="list-btn add" data-mid="{}" aria-label="Add to list">+</button>'.format(m["amc_movie_id"])
 
 
-def _modal_list_info(m, tracked, me):
-    """'Kevin added this too!' line + 'Open shared list' button for the pop-up."""
-    if tracked is None:
+def _modal_list_info(m, interactive):
+    """'Kevin added this too!' (filled in by the page script) + 'Open shared list' button."""
+    if not interactive:
         return ""
-    users = tracked.get(m.get("amc_movie_id")) or []
-    others = [u for u in users if u != me]
-    note = ""
-    if others:
-        verb = "added this too!" if me in users else "already added this"
-        note = '<span class="who-too">&#128101; {} {}</span>'.format(_names(others), verb)
-    return ('<div class="list-row">{}<button class="goto-btn" data-amcr-goto="1">'
-            '&#128203; Open shared list</button></div>').format(note)
+    return ('<div class="list-row"><span class="who-too" data-mid="{}"></span>'
+            '<button class="goto-btn" data-amcr-goto="1">&#128203; Open shared list</button></div>'
+            ).format(m.get("amc_movie_id") or "")
 
 
-def _card_and_modal(prefix, m, theatre_info, is_new, show_times=False, tracked=None, me=None):
+def _card_and_modal(prefix, m, theatre_info, is_new, show_times=False, interactive=False):
     sid = "{}-{}".format(prefix, m.get("amc_movie_id") or abs(hash(m["title"])))
     title = _e(m["title"])
     url = m.get("movie_url") or ""
@@ -246,7 +238,7 @@ def _card_and_modal(prefix, m, theatre_info, is_new, show_times=False, tracked=N
     lo = '<a href="{}" target="_blank" rel="noopener">'.format(_e(url)) if url else ""
     lc = "</a>" if url else ""
     poster = m.get("poster") or ""
-    img = ('<img class="poster" src="{}" alt="{}" loading="lazy">'.format(_e(poster), title)
+    img = ('<img class="poster" src="{}" alt="{}">'.format(_e(poster), title)
            if poster else '<div class="no-poster">&#127916;</div>')
 
     dots = "".join(
@@ -289,7 +281,7 @@ def _card_and_modal(prefix, m, theatre_info, is_new, show_times=False, tracked=N
         '<div class="modal-h">{lo}{title}{lc}</div><div class="modal-meta">{meta}</div>{listinfo}'
         '<div class="section-label">{tc} theatre{tpl} &middot; {td} show date{dpl}</div>{sections}'
         '</div></div>'
-    ).format(sid=sid, title=title, meta=meta, lo=lo, lc=lc, tc=tc, listinfo=_modal_list_info(m, tracked, me), tpl="" if tc == 1 else "s",
+    ).format(sid=sid, title=title, meta=meta, lo=lo, lc=lc, tc=tc, listinfo=_modal_list_info(m, interactive), tpl="" if tc == 1 else "s",
              td=total_dates, dpl="" if total_dates == 1 else "s", sections="".join(sections))
 
     card = (
@@ -299,7 +291,7 @@ def _card_and_modal(prefix, m, theatre_info, is_new, show_times=False, tracked=N
         '{imax}<div class="first-seen">First showing: {first}</div></div>'
         '<div class="card-foot"><button class="dates-btn" data-amcr-open="{sid}">&#128197; {td} date{dpl} '
         '&middot; {tc} theatre{tpl}<br><span>tap to expand &rsaquo;</span></button>{listbtn}</div></div>'
-    ).format(listbtn=_list_button(m, tracked, me),cls=" isnew" if is_new else "", tids=",".join(theatres.keys()),
+    ).format(listbtn=_list_button(m, interactive),cls=" isnew" if is_new else "", tids=",".join(theatres.keys()),
              badge='<span class="badge">NEW</span>' if is_new else "", lo=lo, lc=lc, img=img,
              dots=dots, title=title, meta=meta, imax=imax, first=first, sid=sid,
              td=total_dates, dpl="" if total_dates == 1 else "s", tc=tc, tpl="" if tc == 1 else "s")
@@ -307,8 +299,12 @@ def _card_and_modal(prefix, m, theatre_info, is_new, show_times=False, tracked=N
 
 
 def render_fragment(user_name, meta, movies, prefix="r", when_text=None, show_times=False,
-                    tracked=None, me=None) -> str:
-    """tracked: {amc_movie_id: [names]} for movies on the shared list; me = this person's name."""
+                    interactive=False) -> str:
+    """
+    interactive=False: self-contained block with its own script (used for the downloaded file).
+    interactive=True: markup + styles only, for the website's report component (ui.REPORT_JS
+    drives it, adds the +/- buttons' state and the 'added this too' notes).
+    """
     """The report as an embeddable block (CSS + markup + JS)."""
     theatres = meta.get("theatres") or []
     theatre_info = {str(t["id"]): t for t in theatres}
@@ -317,7 +313,7 @@ def render_fragment(user_name, meta, movies, prefix="r", when_text=None, show_ti
 
     cards, modals, new_cards = [], [], []
     for m in movies:
-        card, modal = _card_and_modal(prefix, m, theatre_info, bool(m.get("is_new")), show_times, tracked, me)
+        card, modal = _card_and_modal(prefix, m, theatre_info, bool(m.get("is_new")), show_times, interactive)
         cards.append(card)
         modals.append(modal)
         if m.get("is_new"):
@@ -366,6 +362,10 @@ def render_fragment(user_name, meta, movies, prefix="r", when_text=None, show_ti
     ).format(user=_e(user_name), sub=subtitle, new=len(new_movies), total=len(movies),
              sched=max(days - empty, 0), empty=empty, chips=chips, new_section=new_section,
              all_section=all_section, modals="".join(modals))
+    if interactive:
+        return CSS + body.replace('<div class="amcr">', '<div class="amcr amcr-loading">'
+                                  '<div class="amcr-loader"><div class="spin"></div>'
+                                  '<div class="msg">Loading posters…</div></div>', 1)
     return CSS + body + JS
 
 

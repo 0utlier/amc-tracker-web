@@ -84,34 +84,146 @@ def _cached_run(_store, run_id, kind):
     return meta, movies, (_store.screenshot(meta.get("screenshot_path")) if meta else None)
 
 
-# Listens for the green + / red - taps on report cards and sends them to Python.
-_LIST_JS = """
+# The run report lives in one page component. It builds the report once, waits for
+# every poster to download, then leaves it alone: later page refreshes only update the
+# +/- buttons and "added this too" notes in place, so nothing reloads while scrolling.
+REPORT_JS = r"""
 export default function (component) {
-  const { setTriggerValue } = component;
-  if (window.__amcrListHandler) document.removeEventListener('click', window.__amcrListHandler);
-  window.__amcrListHandler = function (e) {
-    const btn = e.target && e.target.closest && e.target.closest('[data-amcr-list]');
-    if (!btn || btn.disabled) return;
-    const v = btn.dataset.amcrList;
-    document.querySelectorAll('[data-amcr-list="' + v + '"]').forEach(function (b) {
-      b.disabled = true; b.textContent = '\u2026';
+  const { data, setTriggerValue, parentElement } = component;
+  let box = parentElement.querySelector(':scope > .amcr-host');
+  if (!box) {
+    box = document.createElement('div');
+    box.className = 'amcr-host';
+    parentElement.appendChild(box);
+  }
+  box.__send = setTriggerValue;
+  box.__data = data;
+
+  if (box.__html !== data.html) {
+    box.__html = data.html;
+    box.innerHTML = data.html;
+    preload(box);
+  }
+  if (!box.__bound) { bind(box); box.__bound = true; }
+  applyState(box);
+
+  function names(list) {
+    return list.length < 2 ? list.join('') : list.slice(0, -1).join(', ') + ' & ' + list[list.length - 1];
+  }
+
+  function applyState(box) {
+    const d = box.__data || {};
+    const tracked = d.tracked || {}, me = d.me;
+    box.querySelectorAll('.list-btn[data-mid]').forEach(function (b) {
+      const users = tracked[b.dataset.mid] || [];
+      const mine = users.indexOf(me) >= 0;
+      const others = users.filter(function (u) { return u !== me; });
+      b.disabled = false;
+      b.classList.toggle('remove', mine);
+      b.classList.toggle('add', !mine);
+      b.textContent = mine ? '−' : '+';
+      b.title = mine ? 'Remove from the shared list'
+                     : 'Add to the shared list' + (others.length ? ' (' + names(others) + ' has it)' : '');
     });
-    setTriggerValue('toggle', v + ':' + Date.now());
-  };
-  if (window.__amcrGotoHandler) document.removeEventListener('click', window.__amcrGotoHandler);
-  window.__amcrGotoHandler = function (e) {
-    const go = e.target && e.target.closest && e.target.closest('[data-amcr-goto]');
-    if (!go) return;
+    box.querySelectorAll('.who-too[data-mid]').forEach(function (el) {
+      const users = tracked[el.dataset.mid] || [];
+      const others = users.filter(function (u) { return u !== me; });
+      el.textContent = others.length
+        ? '👥 ' + names(others) + (users.indexOf(me) >= 0 ? ' added this too!' : ' already added this')
+        : '';
+    });
+  }
+
+  function preload(box) {
+    const root = box.querySelector('.amcr');
+    if (!root) return;
+    const urls = Array.from(new Set(Array.from(root.querySelectorAll('img.poster')).map(function (i) { return i.src; })));
+    const msg = root.querySelector('.amcr-loader .msg');
+    let done = 0;
+    function finish() { root.classList.remove('amcr-loading'); }
+    if (!urls.length) { finish(); return; }
+    const timer = setTimeout(finish, 25000);  // never wait forever on a slow poster
+    urls.forEach(function (u) {
+      const im = new Image();
+      im.onload = im.onerror = function () {
+        done += 1;
+        if (msg) msg.textContent = 'Loading posters… ' + done + ' of ' + urls.length;
+        if (done >= urls.length) { clearTimeout(timer); finish(); }
+      };
+      im.src = u;
+    });
+  }
+
+  function closeAll() {
     document.querySelectorAll('.amcr-overlay.open').forEach(function (m) { m.classList.remove('open'); });
     document.body.style.overflow = '';
-    window.scrollTo(0, 0);
-    setTriggerValue('goto', 'tracker:' + Date.now());
-  };
-  document.addEventListener('click', window.__amcrGotoHandler);
-  document.addEventListener('click', window.__amcrListHandler);
+  }
+
+  function applyFilter(root) {
+    const active = Array.from(root.querySelectorAll('.theatre-toggle.active')).map(function (b) { return b.dataset.amcrTid; });
+    root.querySelectorAll('.card').forEach(function (card) {
+      const tids = (card.dataset.theatres || '').split(',');
+      card.classList.toggle('dimmed', !tids.some(function (t) { return active.indexOf(t) >= 0; }));
+    });
+  }
+
+  function bind(box) {
+    if (!window.__amcrEsc) {
+      window.__amcrEsc = true;
+      document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeAll(); });
+    }
+    box.addEventListener('click', function (e) {
+      const t = e.target;
+      if (!t || !t.closest) return;
+      const lb = t.closest('.list-btn[data-mid]');
+      if (lb) {
+        if (lb.disabled) return;
+        const act = lb.classList.contains('remove') ? 'remove' : 'add';
+        box.querySelectorAll('.list-btn[data-mid="' + lb.dataset.mid + '"]').forEach(function (b) {
+          b.disabled = true; b.textContent = '…';
+        });
+        box.__send('toggle', act + ':' + lb.dataset.mid + ':' + Date.now());
+        return;
+      }
+      if (t.closest('[data-amcr-goto]')) {
+        closeAll();
+        window.scrollTo(0, 0);
+        box.__send('goto', 'tracker:' + Date.now());
+        return;
+      }
+      const opener = t.closest('[data-amcr-open]');
+      if (opener) {
+        const m = box.querySelector('#' + CSS.escape(opener.dataset.amcrOpen));
+        if (m) { m.classList.add('open'); document.body.style.overflow = 'hidden'; }
+        return;
+      }
+      if (t.closest('[data-amcr-close]') || t.classList.contains('amcr-overlay')) { closeAll(); return; }
+      const tog = t.closest('[data-amcr-tid]');
+      if (tog) {
+        const root = tog.closest('.amcr');
+        if (tog.classList.contains('active') && root.querySelectorAll('.theatre-toggle.active').length === 1) return;
+        tog.classList.toggle('active');
+        applyFilter(root);
+        return;
+      }
+      const reset = t.closest('[data-amcr-reset]');
+      if (reset) {
+        const r = reset.closest('.amcr');
+        r.querySelectorAll('.theatre-toggle').forEach(function (b) { b.classList.add('active'); });
+        applyFilter(r);
+      }
+    });
+  }
 }
 """
-_list_listener = st.components.v2.component("amcr_list_listener", js=_LIST_JS, isolate_styles=False)
+_report_component = st.components.v2.component("amc_run_report", js=REPORT_JS, isolate_styles=False)
+
+
+@st.cache_data(max_entries=20, show_spinner=False)
+def _report_html(user_name, run_id, show_times, when, _meta, _movies):
+    # Built once per run (+ setting), so the page sends identical HTML and the browser keeps it.
+    return report.render_fragment(user_name, _meta, _movies, prefix="r", when_text=when,
+                                  show_times=show_times, interactive=True)
 
 
 def demo_mode() -> bool:
@@ -292,10 +404,13 @@ def render_run(store, user, run_id, key, show_shot=True):
     when = _when(meta["run_at"])
     show_times = bool(user.get("show_times"))
 
-    tap = _list_listener(key="list_{}".format(key), on_toggle_change=lambda: None,
-                         on_goto_change=_go_to_tracker)
-    if tap and tap.toggle:
-        action, mid = tap.toggle.split(":")[:2]
+    tracked = {str(t["amc_movie_id"]): list(t["users"]) for t in store.list_tracker()}
+    html = _report_html(user["display_name"], run_id, show_times, when, meta, movies)
+    res = _report_component(key="report_{}".format(key),
+                            data={"html": html, "tracked": tracked, "me": user["display_name"]},
+                            on_toggle_change=lambda: None, on_goto_change=_go_to_tracker)
+    if res and res.toggle:
+        action, mid = res.toggle.split(":")[:2]
         m = next((x for x in movies if str(x.get("amc_movie_id")) == mid), None)
         if m and action == "add":
             store.add_to_tracker(user["display_name"], {**m, "dates": [to_date(d) for d in m["dates"]]})
@@ -303,11 +418,7 @@ def render_run(store, user, run_id, key, show_shot=True):
         elif m and action == "remove":
             store.remove_from_tracker(user["display_name"], m["amc_movie_id"])
             st.toast("Removed {} from the list".format(m["title"]), icon="➖")
-
-    tracked = {t["amc_movie_id"]: list(t["users"]) for t in store.list_tracker()}
-    st.html(report.render_fragment(user["display_name"], meta, movies, prefix=key, when_text=when,
-                                   show_times=show_times, tracked=tracked, me=user["display_name"]),
-            unsafe_allow_javascript=True)
+        st.rerun()  # refresh the +/- state from the database
 
     if show_shot and png:
         with st.expander("📸 Screenshot from this run", expanded=False):
