@@ -92,14 +92,6 @@ CSS = """
 .amcr .modal-h{font-size:1rem;font-weight:600;margin:0 0 4px;padding-right:28px}
 .amcr .modal-meta{font-size:.78rem;color:var(--muted);margin-bottom:16px}
 .amcr .section-label{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:14px}
-.amcr.amcr-loading > :not(.amcr-loader){visibility:hidden}
-.amcr .amcr-loader{display:none}
-.amcr.amcr-loading .amcr-loader{display:flex;flex-direction:column;align-items:center;gap:14px;
-  padding:60px 0;color:var(--muted);font-size:.9rem;position:absolute;left:0;right:0}
-.amcr.amcr-loading{position:relative;min-height:240px;max-height:240px;overflow:hidden}
-.amcr .spin{width:34px;height:34px;border-radius:50%;border:3px solid rgba(255,255,255,.12);
-  border-top-color:var(--accent);animation:amcrspin .8s linear infinite}
-@keyframes amcrspin{to{transform:rotate(360deg)}}
 .amcr .who-too:empty{display:none}
 .amcr .list-row{margin:-4px 0 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .amcr .who-too{font-size:.8rem;color:var(--new);font-weight:600}
@@ -221,6 +213,14 @@ def _modal_list_info(m, interactive):
             ).format(m.get("amc_movie_id") or "")
 
 
+def poster_thumb(url: str) -> str:
+    """AMC posters live on Cloudinary, which can resize on the fly. Ask for a phone-sized
+    copy instead of the full-size original (much lighter for iPhones to keep in memory)."""
+    if url and "cloudinary.com" in url and "/image/upload/" in url and "/w_" not in url:
+        return url.replace("/image/upload/", "/image/upload/w_400,c_limit,q_auto,f_auto/", 1)
+    return url
+
+
 def _card_and_modal(prefix, m, theatre_info, is_new, show_times=False, interactive=False):
     sid = "{}-{}".format(prefix, m.get("amc_movie_id") or abs(hash(m["title"])))
     title = _e(m["title"])
@@ -238,7 +238,9 @@ def _card_and_modal(prefix, m, theatre_info, is_new, show_times=False, interacti
     lo = '<a href="{}" target="_blank" rel="noopener">'.format(_e(url)) if url else ""
     lc = "</a>" if url else ""
     poster = m.get("poster") or ""
-    img = ('<img class="poster" src="{}" alt="{}">'.format(_e(poster), title)
+    img = ('<img class="poster" src="{}" data-full="{}" alt="{}" decoding="async" '
+           'onerror="if(this.dataset.full&&this.src!==this.dataset.full)this.src=this.dataset.full">'
+           .format(_e(poster_thumb(poster)), _e(poster), title)
            if poster else '<div class="no-poster">&#127916;</div>')
 
     dots = "".join(
@@ -363,9 +365,7 @@ def render_fragment(user_name, meta, movies, prefix="r", when_text=None, show_ti
              sched=max(days - empty, 0), empty=empty, chips=chips, new_section=new_section,
              all_section=all_section, modals="".join(modals))
     if interactive:
-        return CSS + body.replace('<div class="amcr">', '<div class="amcr amcr-loading">'
-                                  '<div class="amcr-loader"><div class="spin"></div>'
-                                  '<div class="msg">Loading posters…</div></div>', 1)
+        return CSS + body
     return CSS + body + JS
 
 

@@ -95,6 +95,25 @@ class SupabaseStore:
     def delete_movie(self, movie_id):
         self.db.table("movies").delete().eq("id", movie_id).execute()
 
+    def restore_movie(self, snap):
+        """Put back a row removed from the tracker (Undo). Merges if it was re-added meanwhile."""
+        row = {k: snap.get(k) for k in ("amc_movie_id", "title", "users", "notes", "movie_url", *BOOL_FIELDS)}
+        existing = []
+        if snap.get("amc_movie_id") is not None:
+            existing = (self.db.table("movies").select("id, users").eq("amc_movie_id", snap["amc_movie_id"])
+                        .execute().data)
+        if existing:
+            movie_id = existing[0]["id"]
+            users = list(existing[0]["users"] or [])
+            users += [u for u in snap.get("users") or [] if u not in users]
+            self.update_movie(movie_id, {**{k: row[k] for k in ("notes", *BOOL_FIELDS)}, "users": users})
+        else:
+            movie_id = self.db.table("movies").insert(row).execute().data[0]["id"]
+        if snap.get("dates"):
+            self.db.table("movie_dates").upsert(
+                [{"movie_id": movie_id, "show_date": str(d)} for d in snap["dates"]],
+                on_conflict="movie_id,show_date", ignore_duplicates=True).execute()
+
     def remove_from_tracker(self, user_name, amc_movie_id):
         """Undo an add: take this person off the movie; drop the row if nobody's left."""
         rows = self.db.table("movies").select("id, users").eq("amc_movie_id", amc_movie_id).execute().data
@@ -300,6 +319,21 @@ class LocalStore:
                             m["dates"] = sorted({str(d) for d in v})
                         elif k in EDITABLE:
                             m[k] = v
+            self._write(data)
+
+    def restore_movie(self, snap):
+        with self._lock:
+            data = self._read()
+            row = next((m for m in data["movies"] if m["amc_movie_id"] == snap.get("amc_movie_id")), None)
+            if row is None:
+                row = {k: snap.get(k) for k in ("amc_movie_id", "title", "users", "notes", "movie_url", *BOOL_FIELDS)}
+                row["id"] = data["next_id"]
+                data["next_id"] += 1
+                row["dates"] = []
+                data["movies"].append(row)
+            else:
+                row["users"] += [u for u in snap.get("users") or [] if u not in row["users"]]
+            row["dates"] = sorted({*map(str, row["dates"]), *map(str, snap.get("dates") or [])})
             self._write(data)
 
     def remove_from_tracker(self, user_name, amc_movie_id):

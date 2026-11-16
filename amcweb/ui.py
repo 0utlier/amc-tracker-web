@@ -102,7 +102,6 @@ export default function (component) {
   if (box.__html !== data.html) {
     box.__html = data.html;
     box.innerHTML = data.html;
-    preload(box);
   }
   if (!box.__bound) { bind(box); box.__bound = true; }
   applyState(box);
@@ -131,26 +130,6 @@ export default function (component) {
       el.textContent = others.length
         ? '👥 ' + names(others) + (users.indexOf(me) >= 0 ? ' added this too!' : ' already added this')
         : '';
-    });
-  }
-
-  function preload(box) {
-    const root = box.querySelector('.amcr');
-    if (!root) return;
-    const urls = Array.from(new Set(Array.from(root.querySelectorAll('img.poster')).map(function (i) { return i.src; })));
-    const msg = root.querySelector('.amcr-loader .msg');
-    let done = 0;
-    function finish() { root.classList.remove('amcr-loading'); }
-    if (!urls.length) { finish(); return; }
-    const timer = setTimeout(finish, 25000);  // never wait forever on a slow poster
-    urls.forEach(function (u) {
-      const im = new Image();
-      im.onload = im.onerror = function () {
-        done += 1;
-        if (msg) msg.textContent = 'Loading posters… ' + done + ' of ' + urls.length;
-        if (done >= urls.length) { clearTimeout(timer); finish(); }
-      };
-      im.src = u;
     });
   }
 
@@ -264,6 +243,11 @@ def _when(iso) -> str:
 
 def _go(section):
     st.session_state["section"] = section
+
+
+def _names(names):
+    names = list(names)
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " & " + names[-1]
 
 
 def _go_to_tracker():
@@ -413,8 +397,12 @@ def render_run(store, user, run_id, key, show_shot=True):
         action, mid = res.toggle.split(":")[:2]
         m = next((x for x in movies if str(x.get("amc_movie_id")) == mid), None)
         if m and action == "add":
+            others = [u for u in tracked.get(mid, []) if u != user["display_name"]]
             store.add_to_tracker(user["display_name"], {**m, "dates": [to_date(d) for d in m["dates"]]})
-            st.toast("Added {} to the list".format(m["title"]), icon="✅")
+            msg = "Added {} to the list".format(m["title"])
+            if others:
+                msg += " · {} added it too!".format(_names(others))
+            st.toast(msg, icon="✅")
         elif m and action == "remove":
             store.remove_from_tracker(user["display_name"], m["amc_movie_id"])
             st.toast("Removed {} from the list".format(m["title"]), icon="➖")
@@ -482,7 +470,7 @@ def tracker(store, user):
 
     bar = st.container(horizontal=True, vertical_alignment="center")
     view = bar.segmented_control("View", ["Table", "Cards"], key="trk_view",
-                                 default="Cards" if _is_phone() else "Table",
+                                 default="Table",
                                  label_visibility="collapsed") or "Table"
     bar.button("🔄", help="Refresh to see everyone's latest changes")
     with bar.popover("⬇️ Export"):
@@ -493,6 +481,11 @@ def tracker(store, user):
 
     if not movies:
         st.info("The tracker is empty. Run a search on Home and add movies from the results.")
+        undo = st.session_state.get("trk_undo")
+        if undo:  # removed the last one: still offer Undo
+            row = st.container(horizontal=True, vertical_alignment="center")
+            row.button("↩️ Undo", key="trk_undo_btn", type="primary", on_click=_undo_remove, args=(store,))
+            row.caption("Removed “{}”".format(undo["title"]))
         return
     st.caption("Edits save automatically. In DATE, type days like 1-5, 7 & 9 "
                "(add a month for others: 28-31, Jan 1-3).")
@@ -508,32 +501,71 @@ def tracker(store, user):
             for m in group:
                 _movie_card(store, key, m, ver)
 
-    with st.expander("🗑️ Remove a movie from the tracker"):
+    undo = st.session_state.get("trk_undo")
+    with st.expander("🗑️ Remove a movie from the tracker", expanded=bool(undo)):
         options = {m["id"]: "{} ({})".format(m["title"], compact(m["dates"])) for m in movies}
         mid = st.selectbox("Movie", list(options), format_func=options.get, key="trk_del_pick")
-        if st.button("Remove it", key="trk_del_btn"):
-            store.delete_movie(mid)
-            st.session_state["trk_ver"] = ver + 1
-            st.toast("Removed", icon="🗑️")
-            st.rerun()
+        row = st.container(horizontal=True, vertical_alignment="center")
+        if row.button("Remove it", key="trk_del_btn"):
+            target = next(m for m in movies if m["id"] == mid)
+            others = [u for u in target["users"] if u != user["display_name"]]
+            if others or user["display_name"] not in target["users"]:
+                _confirm_remove(store, user, target, others)
+            else:
+                _remove_row(store, target)
+        if undo:
+            row.button("↩️ Undo", key="trk_undo_btn", type="primary", on_click=_undo_remove, args=(store,))
+            row.caption("Removed “{}”".format(undo["title"]))
+
+
+def _remove_row(store, target):
+    store.delete_movie(target["id"])
+    st.session_state["trk_undo"] = dict(target)  # full copy: names, dates, checkboxes, notes
+    st.session_state["trk_ver"] = st.session_state.get("trk_ver", 0) + 1
+    st.toast("Removed {}".format(target["title"]), icon="🗑️")
+    st.rerun()
+
+
+def _undo_remove(store):
+    snap = st.session_state.pop("trk_undo", None)
+    if snap:
+        store.restore_movie(snap)
+        st.session_state["trk_ver"] = st.session_state.get("trk_ver", 0) + 1
+        st.toast("Put back {}".format(snap["title"]), icon="↩️")
+
+
+@st.dialog("Remove this movie?")
+def _confirm_remove(store, user, target, others):
+    st.write("**{}**".format(target["title"]))
+    if others:
+        st.warning("{} {} added this movie. Removing it takes it off the list for everyone.".format(
+            _names(others), "has" if len(others) == 1 else "have"), icon="👥")
+    if user["display_name"] not in target["users"]:
+        st.caption("You haven't added this one yourself.")
+    with st.container(key="reset_zone_remove"):
+        if st.button("Yes, remove it", width="stretch"):
+            _remove_row(store, target)
+    if st.button("Cancel", width="stretch"):
+        st.rerun()
 
 
 def _month_table(store, header, group, ver):
     df = pd.DataFrame([{
         "DATE": compact(m["dates"], header) if m["dates"] else "",
-        "MOVIE": m["title"],
+        "MOVIE": "{}#{}".format(m.get("movie_url") or "https://www.amctheatres.com/movies", m["title"]),
         "USER": ", ".join(m["users"]),
         **{col: bool(m[field]) for col, field in BOOL_COLS.items()},
         "NOTES": m.get("notes") or "",
     } for m in group])
     ed_key = "trk_{}_{}_{}".format(header[0], header[1], ver)
     st.data_editor(
-        df, key=ed_key, hide_index=True, width="stretch", num_rows="fixed",
+        df, key=ed_key, hide_index=True, width="stretch", num_rows="fixed", disabled=["MOVIE"],
         height=36 * (len(df) + 1) + 4,
         on_change=_tracker_changed, args=(store, ed_key, [m["id"] for m in group], header),
         column_config={
             "DATE": st.column_config.TextColumn("DATE", width=140),
-            "MOVIE": st.column_config.TextColumn("MOVIE", width=190),
+            "MOVIE": st.column_config.LinkColumn("MOVIE", width=190, display_text=r"#(.*)$",
+                                                 help="Opens the movie on AMC"),
             "USER": st.column_config.TextColumn("USER", width=110),
             **{c: st.column_config.CheckboxColumn(c, width=128) for c in BOOL_COLS},
             "NOTES": st.column_config.TextColumn("NOTES", width=210),
