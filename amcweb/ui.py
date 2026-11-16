@@ -25,10 +25,10 @@ BOOL_COLS = {
 CSS = """
 <style>
 [data-testid="stMainBlockContainer"], .block-container {
-  padding-top: 1.4rem; padding-bottom: 4rem; max-width: 1320px; }
+  padding-top: 4.5rem; padding-bottom: 4rem; max-width: 1320px; }
 @media (max-width: 640px) {
   [data-testid="stMainBlockContainer"], .block-container {
-    padding-left: .7rem; padding-right: .7rem; padding-top: .8rem; }
+    padding-left: .7rem; padding-right: .7rem; padding-top: 4rem; }
   h1 { font-size: 1.55rem !important; }
   h3 { font-size: 1.15rem !important; }
 }
