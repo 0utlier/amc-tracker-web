@@ -23,8 +23,13 @@ def _make_page(user):
     return st.Page(page, title=user["display_name"], icon="🍿", url_path=slug)
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _user_list(kind):
+    return [{"slug": u["slug"], "display_name": u["display_name"]} for u in ui.get_store().list_users()]
+
+
 try:
-    users = ui.get_store().list_users()
+    users = _user_list(ui.get_store().kind)
 except Exception as e:
     st.error("Couldn't reach the database. Check SUPABASE_URL / SUPABASE_KEY in secrets.")
     st.exception(e)
