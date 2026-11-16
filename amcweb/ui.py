@@ -30,11 +30,16 @@ BOOL_COLS = {
 
 CSS = """
 <style>
-[data-testid="stMainBlockContainer"], .block-container {
-  padding-top: 4.5rem; padding-bottom: 4rem; padding-left: .5rem; padding-right: .5rem;
-  max-width: none; }
+/* Full width, edge to edge. !important so it wins over Streamlit's own layout rules
+   in every Streamlit version (they've renamed these containers over time). */
+[data-testid="stMainBlockContainer"], [data-testid="stAppViewBlockContainer"],
+.block-container, .stMainBlockContainer, section.main > div {
+  max-width: 100% !important; width: 100% !important;
+  padding-left: .5rem !important; padding-right: .5rem !important;
+  padding-top: 4.5rem !important; padding-bottom: 4rem !important; }
 @media (max-width: 640px) {
-  [data-testid="stMainBlockContainer"], .block-container { padding-top: 4rem; }
+  [data-testid="stMainBlockContainer"], [data-testid="stAppViewBlockContainer"],
+  .block-container, .stMainBlockContainer { padding-top: 4rem !important; }
   h1 { font-size: 1.55rem !important; }
   h3 { font-size: 1.15rem !important; }
 }
