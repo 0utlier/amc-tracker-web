@@ -59,8 +59,16 @@ CSS = """
 
 
 # ── Shared resources ──────────────────────────────────────────────────────────
-@st.cache_resource
 def get_store():
+    # The code's timestamp is part of the cache key, so after an update the site
+    # builds a fresh connection instead of reusing one made by the old code.
+    from pathlib import Path
+    stamp = max(Path(__file__).with_name(n).stat().st_mtime for n in ("store.py", "ui.py"))
+    return _make_store(stamp)
+
+
+@st.cache_resource(max_entries=1)
+def _make_store(_stamp):
     url, key = secret("SUPABASE_URL"), secret("SUPABASE_KEY")
     if url and key:
         return SupabaseStore(url, key)
@@ -238,7 +246,9 @@ def render_run(store, user, run_id, key, show_shot=True):
         return
     movies = sorted(movies, key=lambda m: (str(m["dates"][0]) if m["dates"] else "", m["title"].lower()))
     when = _when(meta["run_at"])
-    st.html(report.render_fragment(user["display_name"], meta, movies, prefix=key, when_text=when),
+    show_times = bool(user.get("show_times"))
+    st.html(report.render_fragment(user["display_name"], meta, movies, prefix=key, when_text=when,
+                                   show_times=show_times),
             unsafe_allow_javascript=True)
 
     png = store.screenshot(meta.get("screenshot_path"))
@@ -250,7 +260,7 @@ def render_run(store, user, run_id, key, show_shot=True):
     dl = st.container(horizontal=True)
     d1 = d2 = d3 = dl
     stamp = str(meta["run_at"])[:16].replace(":", "").replace("T", "_")
-    dl.download_button("🌐 Report (.html)", report.render_page(user["display_name"], meta, movies, when),
+    dl.download_button("🌐 Report (.html)", report.render_page(user["display_name"], meta, movies, when, show_times),
                        "amc_report_{}.html".format(stamp), "text/html", key="{}_html".format(key))
     if png:
         d1.download_button("📸 Screenshot", png, "amc_run_{}.png".format(stamp), "image/png",
@@ -425,6 +435,14 @@ def _load_saved(user):
     st.session_state["set_days"] = int(user["days"])
 
 
+def _save_show_times(store, user):
+    try:
+        store.set_show_times(user["slug"], bool(st.session_state["set_show_times"]))
+        st.toast("Saved", icon="✅")
+    except Exception:
+        st.toast("Couldn't save. Has update_3.sql been run in Supabase?", icon="⚠️")
+
+
 def _clear_zip():
     st.session_state["set_zip"] = ""
 
@@ -433,7 +451,7 @@ def _clear_zip():
 def _confirm_reset(store, user):
     st.write("This permanently deletes **{}**'s last 5 runs and screenshots, forgets which movies "
              "they've already seen (so everything shows as NEW again), and puts settings back to "
-             "the defaults: no ZIP (the 4 default theaters), 5 theaters, 90 days.".format(user["display_name"]))
+             "the defaults: no ZIP (the 4 default theaters), 5 theaters, 90 days, showtimes hidden.".format(user["display_name"]))
     st.caption("The shared tracker isn't touched.")
     with st.container(key="reset_zone_confirm"):
         if st.button("Yes, reset {}".format(user["display_name"]), width="stretch"):
@@ -487,6 +505,13 @@ def settings(store, user):
                    int(st.session_state["set_days"]))
     if st.session_state.get("current_run"):
         st.button("See results on Home →", on_click=_go, args=("Home",))
+
+    st.divider()
+    st.markdown("**Display**")
+    st.toggle("Show showtimes in the date pop-up", value=bool(user.get("show_times")),
+              key="set_show_times", on_change=_save_show_times, args=(store, user),
+              help="Off: each date shows just the date, like the original report. "
+                   "On: each date also lists its times, which link to AMC tickets.")
 
     st.divider()
     st.markdown("**Reset**")

@@ -178,7 +178,7 @@ def _fmt_date(d):
         return _e(d)
 
 
-def _card_and_modal(prefix, m, theatre_info, is_new):
+def _card_and_modal(prefix, m, theatre_info, is_new, show_times=False):
     sid = "{}-{}".format(prefix, m.get("amc_movie_id") or abs(hash(m["title"])))
     title = _e(m["title"])
     url = m.get("movie_url") or ""
@@ -219,8 +219,9 @@ def _card_and_modal(prefix, m, theatre_info, is_new):
             times = ", ".join(
                 '<a href="{}" target="_blank" rel="noopener">{}</a>'.format(_e(s["url"]), _e(s["time"]))
                 if s.get("url") else _e(s["time"]) for s in shows)
-            chips.append('<div class="date-chip"><div class="d">{}{}</div><div class="t">{}</div></div>'.format(
-                _fmt_date(d), " " + _badge("IMAX") if has_imax else "", times))
+            chips.append('<div class="date-chip"><div class="d">{}{}</div>{}</div>'.format(
+                _fmt_date(d), " " + _badge("IMAX") if has_imax else "",
+                '<div class="t">{}</div>'.format(times) if show_times else ""))
         sections.append(
             '<div class="modal-theatre"><div class="modal-theatre-label" style="color:{c}">'
             '<span class="modal-tdot" style="background:{c}"></span>{n}{d}</div>'
@@ -250,7 +251,7 @@ def _card_and_modal(prefix, m, theatre_info, is_new):
     return card, modal
 
 
-def render_fragment(user_name, meta, movies, prefix="r", when_text=None) -> str:
+def render_fragment(user_name, meta, movies, prefix="r", when_text=None, show_times=False) -> str:
     """The report as an embeddable block (CSS + markup + JS)."""
     theatres = meta.get("theatres") or []
     theatre_info = {str(t["id"]): t for t in theatres}
@@ -259,7 +260,7 @@ def render_fragment(user_name, meta, movies, prefix="r", when_text=None) -> str:
 
     cards, modals, new_cards = [], [], []
     for m in movies:
-        card, modal = _card_and_modal(prefix, m, theatre_info, bool(m.get("is_new")))
+        card, modal = _card_and_modal(prefix, m, theatre_info, bool(m.get("is_new")), show_times)
         cards.append(card)
         modals.append(modal)
         if m.get("is_new"):
@@ -311,7 +312,7 @@ def render_fragment(user_name, meta, movies, prefix="r", when_text=None) -> str:
     return CSS + body + JS
 
 
-def render_page(user_name, meta, movies, when_text=None) -> str:
+def render_page(user_name, meta, movies, when_text=None, show_times=False) -> str:
     """A standalone .html file, like the Mac script's amc_movies.html."""
     return (
         "<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'>"
@@ -319,4 +320,4 @@ def render_page(user_name, meta, movies, when_text=None) -> str:
         "<title>AMC Tracker — {}</title></head>"
         "<body style='margin:0;background:#0d0d12;padding:28px 20px'>"
         "<div style='max-width:1200px;margin:0 auto'>{}</div></body></html>"
-    ).format(_e(user_name), render_fragment(user_name, meta, movies, "p", when_text))
+    ).format(_e(user_name), render_fragment(user_name, meta, movies, "p", when_text, show_times))

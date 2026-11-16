@@ -18,6 +18,7 @@ from .datefmt import to_date
 
 KEEP_RUNS = 5
 DEFAULT_PREFS = {"zip": None, "theatre_count": 5, "days": 90}
+DEFAULT_DISPLAY = {"show_times": False}
 CARD_FIELDS = ("poster", "rating", "runtime", "genre")
 BUCKET = "run-screenshots"
 BOOL_FIELDS = ("alist_available", "jonathan_purchased", "needs_refund", "needs_alternative")
@@ -169,6 +170,13 @@ class SupabaseStore:
         self.db.table("runs").delete().eq("user_id", user["id"]).execute()
         self.db.table("seen_movies").delete().eq("user_id", user["id"]).execute()
         self.db.table("users").update(DEFAULT_PREFS).eq("id", user["id"]).execute()
+        try:
+            self.db.table("users").update(DEFAULT_DISPLAY).eq("id", user["id"]).execute()
+        except Exception:
+            pass  # column added by update_3.sql; fine if not there yet
+
+    def set_show_times(self, slug, on):
+        self.db.table("users").update({"show_times": bool(on)}).eq("slug", slug).execute()
 
     def list_runs(self, slug):
         user = self.get_user(slug)
@@ -236,6 +244,14 @@ class LocalStore:
             for u in data["users"]:
                 if u["slug"] == slug:
                     u.update(zip=zip_code, theatre_count=int(theatre_count), days=int(days))
+            self._write(data)
+
+    def set_show_times(self, slug, on):
+        with self._lock:
+            data = self._read()
+            for u in data["users"]:
+                if u["slug"] == slug:
+                    u["show_times"] = bool(on)
             self._write(data)
 
     # tracker
@@ -328,7 +344,7 @@ class LocalStore:
         with self._lock:
             data = self._read()
             user = next(u for u in data["users"] if u["slug"] == slug)
-            user.update(DEFAULT_PREFS)
+            user.update(DEFAULT_PREFS, **DEFAULT_DISPLAY)
             mine = {r["id"] for r in data["runs"] if r["user_id"] == user["id"]}
             for r in data["runs"]:
                 if r["id"] in mine and r.get("screenshot_path"):
