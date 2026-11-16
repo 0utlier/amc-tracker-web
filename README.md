@@ -4,9 +4,9 @@ A website version of `amc_tracker.py` for JD, Meagan and Kevin. It works on iPho
 Each person has their own address:
 
 ```
-https://YOUR-APP.streamlit.app/jd
-https://YOUR-APP.streamlit.app/meagan
-https://YOUR-APP.streamlit.app/kevin
+https://amc-tracker.streamlit.app/jd
+https://amc-tracker.streamlit.app/meagan
+https://amc-tracker.streamlit.app/kevin
 ```
 
 There are no passwords or accounts, so anyone who has a link can open that page.
