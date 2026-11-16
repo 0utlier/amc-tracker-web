@@ -92,6 +92,16 @@ CSS = """
 .amcr .modal-h{font-size:1rem;font-weight:600;margin:0 0 4px;padding-right:28px}
 .amcr .modal-meta{font-size:.78rem;color:var(--muted);margin-bottom:16px}
 .amcr .section-label{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:14px}
+.amcr .card-foot{margin-top:auto;display:flex;align-items:stretch;border-top:1px solid var(--border)}
+.amcr .card-foot .dates-btn{margin-top:0;border-top:none;flex:1;min-width:0}
+.amcr .list-btn{flex:0 0 auto;width:34px;height:34px;margin:auto 10px auto 0;border-radius:50%;border:none;
+  font-size:1.25rem;font-weight:700;line-height:1;cursor:pointer;display:flex;align-items:center;
+  justify-content:center;font-family:inherit;transition:transform .1s,filter .1s;padding:0}
+.amcr .list-btn:hover{filter:brightness(1.15)}
+.amcr .list-btn:active{transform:scale(.92)}
+.amcr .list-btn.add{background:#16a34a;color:#fff}
+.amcr .list-btn.remove{background:#dc2626;color:#fff}
+.amcr .list-btn[disabled]{opacity:.5;cursor:default}
 .amcr .modal-theatre{margin-bottom:18px}
 .amcr .modal-theatre:last-child{margin-bottom:0}
 .amcr .modal-theatre-label{font-size:.78rem;font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:7px}
@@ -181,7 +191,20 @@ def _fmt_date(d):
         return _e(d)
 
 
-def _card_and_modal(prefix, m, theatre_info, is_new, show_times=False):
+def _list_button(m, tracked):
+    """Green + (add me to the shared list) or red - (take me off). None = no button (downloaded file)."""
+    if tracked is None or not m.get("amc_movie_id"):
+        return ""
+    state = tracked.get(m["amc_movie_id"])
+    if state == "me":
+        return ('<button class="list-btn remove" data-amcr-list="remove:{}" title="Remove from the shared list" '
+                'aria-label="Remove from list">&minus;</button>').format(m["amc_movie_id"])
+    tip = "Add to the shared list" + (" ({} has it)".format(_e(state)) if state else "")
+    return ('<button class="list-btn add" data-amcr-list="add:{}" title="{}" '
+            'aria-label="Add to list">+</button>').format(m["amc_movie_id"], tip)
+
+
+def _card_and_modal(prefix, m, theatre_info, is_new, show_times=False, tracked=None):
     sid = "{}-{}".format(prefix, m.get("amc_movie_id") or abs(hash(m["title"])))
     title = _e(m["title"])
     url = m.get("movie_url") or ""
@@ -249,16 +272,18 @@ def _card_and_modal(prefix, m, theatre_info, is_new, show_times=False):
         '<div class="theatre-dots">{dots}</div>'
         '<div class="info"><div class="title">{lo}{title}{lc}</div><div class="meta">{meta}</div>'
         '{imax}<div class="first-seen">First showing: {first}</div></div>'
-        '<button class="dates-btn" data-amcr-open="{sid}">&#128197; {td} date{dpl} &middot; {tc} theatre{tpl}'
-        '<br><span>tap to expand &rsaquo;</span></button></div>'
-    ).format(cls=" isnew" if is_new else "", tids=",".join(theatres.keys()),
+        '<div class="card-foot"><button class="dates-btn" data-amcr-open="{sid}">&#128197; {td} date{dpl} '
+        '&middot; {tc} theatre{tpl}<br><span>tap to expand &rsaquo;</span></button>{listbtn}</div></div>'
+    ).format(listbtn=_list_button(m, tracked),cls=" isnew" if is_new else "", tids=",".join(theatres.keys()),
              badge='<span class="badge">NEW</span>' if is_new else "", lo=lo, lc=lc, img=img,
              dots=dots, title=title, meta=meta, imax=imax, first=first, sid=sid,
              td=total_dates, dpl="" if total_dates == 1 else "s", tc=tc, tpl="" if tc == 1 else "s")
     return card, modal
 
 
-def render_fragment(user_name, meta, movies, prefix="r", when_text=None, show_times=False) -> str:
+def render_fragment(user_name, meta, movies, prefix="r", when_text=None, show_times=False,
+                    tracked=None) -> str:
+    """tracked: {amc_movie_id: "me" | "<names>"} for movies already on the shared list."""
     """The report as an embeddable block (CSS + markup + JS)."""
     theatres = meta.get("theatres") or []
     theatre_info = {str(t["id"]): t for t in theatres}
@@ -267,7 +292,7 @@ def render_fragment(user_name, meta, movies, prefix="r", when_text=None, show_ti
 
     cards, modals, new_cards = [], [], []
     for m in movies:
-        card, modal = _card_and_modal(prefix, m, theatre_info, bool(m.get("is_new")), show_times)
+        card, modal = _card_and_modal(prefix, m, theatre_info, bool(m.get("is_new")), show_times, tracked)
         cards.append(card)
         modals.append(modal)
         if m.get("is_new"):

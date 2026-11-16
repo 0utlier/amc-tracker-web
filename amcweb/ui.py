@@ -82,6 +82,26 @@ def _cached_run(_store, run_id, kind):
     return meta, movies, (_store.screenshot(meta.get("screenshot_path")) if meta else None)
 
 
+# Listens for the green + / red - taps on report cards and sends them to Python.
+_LIST_JS = """
+export default function (component) {
+  const { setTriggerValue } = component;
+  if (window.__amcrListHandler) document.removeEventListener('click', window.__amcrListHandler);
+  window.__amcrListHandler = function (e) {
+    const btn = e.target && e.target.closest && e.target.closest('[data-amcr-list]');
+    if (!btn || btn.disabled) return;
+    const v = btn.dataset.amcrList;
+    document.querySelectorAll('[data-amcr-list="' + v + '"]').forEach(function (b) {
+      b.disabled = true; b.textContent = '\u2026';
+    });
+    setTriggerValue('toggle', v + ':' + Date.now());
+  };
+  document.addEventListener('click', window.__amcrListHandler);
+}
+"""
+_list_listener = st.components.v2.component("amcr_list_listener", js=_LIST_JS, isolate_styles=False)
+
+
 def demo_mode() -> bool:
     return truthy(secret("DEMO_MODE", "")) or not secret("AMC_VENDOR_KEY")
 
@@ -255,8 +275,24 @@ def render_run(store, user, run_id, key, show_shot=True):
     movies = sorted(movies, key=lambda m: (str(m["dates"][0]) if m["dates"] else "", m["title"].lower()))
     when = _when(meta["run_at"])
     show_times = bool(user.get("show_times"))
+
+    tap = _list_listener(key="list_{}".format(key), on_toggle_change=lambda: None)
+    if tap and tap.toggle:
+        action, mid = tap.toggle.split(":")[:2]
+        m = next((x for x in movies if str(x.get("amc_movie_id")) == mid), None)
+        if m and action == "add":
+            store.add_to_tracker(user["display_name"], {**m, "dates": [to_date(d) for d in m["dates"]]})
+            st.toast("Added {} to the list".format(m["title"]), icon="✅")
+        elif m and action == "remove":
+            store.remove_from_tracker(user["display_name"], m["amc_movie_id"])
+            st.toast("Removed {} from the list".format(m["title"]), icon="➖")
+
+    tracked = {}
+    for t in store.list_tracker():
+        tracked[t["amc_movie_id"]] = ("me" if user["display_name"] in t["users"]
+                                      else ", ".join(t["users"]) or "someone")
     st.html(report.render_fragment(user["display_name"], meta, movies, prefix=key, when_text=when,
-                                   show_times=show_times),
+                                   show_times=show_times, tracked=tracked),
             unsafe_allow_javascript=True)
 
     if show_shot and png:
@@ -278,47 +314,6 @@ def render_run(store, user, run_id, key, show_shot=True):
                        "amc_run_{}.xlsx".format(stamp), key="{}_xlsx".format(key), on_click="ignore")
     d3.download_button("📄 CSV", lambda: exports.run_csv(meta, movies), "amc_run_{}.csv".format(stamp),
                        "text/csv", key="{}_csv".format(key), on_click="ignore")
-
-    if not movies:
-        return
-    with st.expander("➕ Add movies from this run to the shared tracker", expanded=False):
-        _add_to_tracker(store, user, run_id, key, movies)
-
-
-def _add_to_tracker(store, user, run_id, key, movies):
-    tracked = {m["amc_movie_id"]: m for m in store.list_tracker()}
-    rows = []
-    for m in movies:
-        t = tracked.get(m["amc_movie_id"])
-        status = ""
-        if t:
-            status = "✓ You" if user["display_name"] in t["users"] else "✓ " + ", ".join(t["users"])
-        rows.append({
-            "Add": False, "MOVIE": m["title"], "DATES": compact(m["dates"]),
-            "THEATERS": m.get("theatre_count", 0), "IMAX": "IMAX" if m.get("is_imax") else "",
-            "IN TRACKER": status, "AMC": m.get("movie_url") or None,
-        })
-    ed_key = "run_{}_{}_{}".format(key, run_id, st.session_state.get("run_ver", 0))
-    edited = st.data_editor(
-        pd.DataFrame(rows), key=ed_key, hide_index=True, width="stretch",
-        height=min(36 * (len(rows) + 1) + 4, 1200),
-        disabled=["MOVIE", "DATES", "THEATERS", "IMAX", "IN TRACKER", "AMC"],
-        column_config={
-            "Add": st.column_config.CheckboxColumn("Add", width="small", pinned=True),
-            "MOVIE": st.column_config.TextColumn("MOVIE", width="medium", pinned=True),
-            "THEATERS": st.column_config.NumberColumn("THEATERS", width="small"),
-            "IMAX": st.column_config.TextColumn("IMAX", width="small"),
-            "AMC": st.column_config.LinkColumn("AMC", display_text="Open", width="small"),
-        },
-    )
-    picked = [movies[i] for i, v in enumerate(edited["Add"]) if v]
-    if st.button("➕ Add {} selected to tracker".format(len(picked)), type="primary",
-                 disabled=not picked, width="stretch", key="{}_add".format(key)):
-        for m in picked:
-            store.add_to_tracker(user["display_name"], {**m, "dates": [to_date(d) for d in m["dates"]]})
-        st.session_state["run_ver"] = st.session_state.get("run_ver", 0) + 1
-        st.toast("Added {} to the shared tracker".format(len(picked)), icon="✅")
-        st.rerun()
 
 
 # ── Shared tracker ────────────────────────────────────────────────────────────

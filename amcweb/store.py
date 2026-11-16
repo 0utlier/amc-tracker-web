@@ -95,6 +95,16 @@ class SupabaseStore:
     def delete_movie(self, movie_id):
         self.db.table("movies").delete().eq("id", movie_id).execute()
 
+    def remove_from_tracker(self, user_name, amc_movie_id):
+        """Undo an add: take this person off the movie; drop the row if nobody's left."""
+        rows = self.db.table("movies").select("id, users").eq("amc_movie_id", amc_movie_id).execute().data
+        for r in rows:
+            left = [u for u in (r.get("users") or []) if u != user_name]
+            if left:
+                self.db.table("movies").update({"users": left, "updated_at": _now_iso()}).eq("id", r["id"]).execute()
+            else:
+                self.delete_movie(r["id"])
+
     # runs ────────────────────────────────────────────────────────────────────
     def save_run(self, slug, meta, movies, png: bytes | None):
         user = self.get_user(slug)
@@ -290,6 +300,19 @@ class LocalStore:
                             m["dates"] = sorted({str(d) for d in v})
                         elif k in EDITABLE:
                             m[k] = v
+            self._write(data)
+
+    def remove_from_tracker(self, user_name, amc_movie_id):
+        with self._lock:
+            data = self._read()
+            keep = []
+            for m in data["movies"]:
+                if m["amc_movie_id"] == amc_movie_id:
+                    m["users"] = [u for u in m["users"] if u != user_name]
+                    if not m["users"]:
+                        continue
+                keep.append(m)
+            data["movies"] = keep
             self._write(data)
 
     def delete_movie(self, movie_id):
