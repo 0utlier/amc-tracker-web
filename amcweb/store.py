@@ -9,6 +9,7 @@ Both expose the same methods, so the UI never cares which one it's talking to.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import uuid
 from datetime import date, datetime, timezone
@@ -25,13 +26,26 @@ BOOL_FIELDS = ("alist_available", "jonathan_purchased", "needs_refund", "needs_a
 EDITABLE = {"title", "users", "notes", *BOOL_FIELDS}
 
 
-def auto_note(is_imax: bool, theatre_count: int) -> str:
+def short_theatre(name: str) -> str:
+    """'AMC NewCity 14' -> 'NewCity', 'AMC DINE-IN Block 37' -> 'Block 37'."""
+    n = re.sub(r"^AMC\s+(DINE-IN\s+|CLASSIC\s+)?", "", (name or "").strip(), flags=re.I)
+    n = re.sub(r"\s+\d+$", "", n) if not re.search(r"Block\s+\d+$", n, re.I) else n
+    return n or name
+
+
+def auto_note(is_imax: bool, theatre_count: int, theatre_name: str = "") -> str:
     parts = []
     if is_imax:
         parts.append("IMAX")
     if theatre_count == 1:
-        parts.append("Only one theater")
+        parts.append("ONLY {}".format(short_theatre(theatre_name)) if theatre_name else "Only one theater")
     return "; ".join(parts)
+
+
+def movie_note(movie) -> str:
+    theatres = list((movie.get("theatres") or {}).values())
+    only = theatres[0]["name"] if len(theatres) == 1 else ""
+    return auto_note(bool(movie.get("is_imax")), int(movie.get("theatre_count") or 0), only)
 
 
 def _now_iso():
@@ -73,8 +87,7 @@ class SupabaseStore:
             "p_title": movie["title"],
             "p_user": user_name,
             "p_dates": [str(d) for d in movie["dates"]],
-            "p_is_imax": bool(movie.get("is_imax")),
-            "p_theatre_count": int(movie.get("theatre_count") or 0),
+            "p_note": movie_note(movie),
             "p_movie_url": movie.get("movie_url") or None,
         }).execute()
 
@@ -299,7 +312,7 @@ class LocalStore:
                     "id": data["next_id"], "amc_movie_id": movie["amc_movie_id"],
                     "title": movie["title"], "users": [user_name],
                     **{f: False for f in BOOL_FIELDS},
-                    "notes": auto_note(bool(movie.get("is_imax")), int(movie.get("theatre_count") or 0)),
+                    "notes": movie_note(movie),
                     "movie_url": movie.get("movie_url"), "dates": [],
                 }
                 data["next_id"] += 1

@@ -8,6 +8,7 @@ render_page() wraps the same block in a full HTML file for download.
 from __future__ import annotations
 
 import html
+import re
 from datetime import datetime
 
 from .datefmt import to_date
@@ -216,8 +217,15 @@ def _modal_list_info(m, interactive):
 def poster_thumb(url: str) -> str:
     """AMC posters live on Cloudinary, which can resize on the fly. Ask for a phone-sized
     copy instead of the full-size original (much lighter for iPhones to keep in memory)."""
-    if url and "cloudinary.com" in url and "/image/upload/" in url and "/w_" not in url:
-        return url.replace("/image/upload/", "/image/upload/w_400,c_limit,q_auto,f_auto/", 1)
+    t = "w_400,c_limit,q_auto,f_auto"
+    if not url or "cloudinary.com" not in url or "/w_" in url:
+        return url
+    if "/image/upload/" in url:
+        return url.replace("/image/upload/", "/image/upload/{}/".format(t), 1)
+    # short form: https://amc-theatres-res.cloudinary.com/v123/amc-cdn/... (image/upload implied)
+    m = re.match(r"(https?://[^/]*cloudinary\.com)/(.+)$", url)
+    if m and not m.group(2).startswith(("image/", "video/", "raw/")):
+        return "{}/image/upload/{}/{}".format(m.group(1), t, m.group(2))
     return url
 
 
@@ -238,7 +246,7 @@ def _card_and_modal(prefix, m, theatre_info, is_new, show_times=False, interacti
     lo = '<a href="{}" target="_blank" rel="noopener">'.format(_e(url)) if url else ""
     lc = "</a>" if url else ""
     poster = m.get("poster") or ""
-    img = ('<img class="poster" src="{}" data-full="{}" alt="{}" decoding="async" '
+    img = ('<img class="poster" src="{}" data-full="{}" alt="{}" '
            'onerror="if(this.dataset.full&&this.src!==this.dataset.full)this.src=this.dataset.full">'
            .format(_e(poster_thumb(poster)), _e(poster), title)
            if poster else '<div class="no-poster">&#127916;</div>')

@@ -250,6 +250,12 @@ def _names(names):
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " & " + names[-1]
 
 
+def _blip(title, action, extra=""):
+    """Toast text: movie title, then what happened, then who else (each on its own line)."""
+    lines = ["**{}**".format(title.replace("*", "\\*")), action] + ([extra] if extra else [])
+    return "  \n".join(lines)
+
+
 def _go_to_tracker():
     st.session_state["section"] = "Tracker"
 
@@ -399,13 +405,14 @@ def render_run(store, user, run_id, key, show_shot=True):
         if m and action == "add":
             others = [u for u in tracked.get(mid, []) if u != user["display_name"]]
             store.add_to_tracker(user["display_name"], {**m, "dates": [to_date(d) for d in m["dates"]]})
-            msg = "Added {} to the list".format(m["title"])
-            if others:
-                msg += " · {} added it too!".format(_names(others))
-            st.toast(msg, icon="✅")
+            st.toast(_blip(m["title"], "Added to the list",
+                           "{} added it too!".format(_names(others)) if others else ""), icon="✅")
         elif m and action == "remove":
+            others = [u for u in tracked.get(mid, []) if u != user["display_name"]]
             store.remove_from_tracker(user["display_name"], m["amc_movie_id"])
-            st.toast("Removed {} from the list".format(m["title"]), icon="➖")
+            st.toast(_blip(m["title"], "Removed from the list",
+                           "{} still {} it".format(_names(others), "has" if len(others) == 1 else "have")
+                           if others else ""), icon="➖")
         st.rerun()  # refresh the +/- state from the database
 
     if show_shot and png:
@@ -522,7 +529,7 @@ def _remove_row(store, target):
     store.delete_movie(target["id"])
     st.session_state["trk_undo"] = dict(target)  # full copy: names, dates, checkboxes, notes
     st.session_state["trk_ver"] = st.session_state.get("trk_ver", 0) + 1
-    st.toast("Removed {}".format(target["title"]), icon="🗑️")
+    st.toast(_blip(target["title"], "Removed from the list", "Tap Undo to put it back"), icon="🗑️")
     st.rerun()
 
 
@@ -531,7 +538,7 @@ def _undo_remove(store):
     if snap:
         store.restore_movie(snap)
         st.session_state["trk_ver"] = st.session_state.get("trk_ver", 0) + 1
-        st.toast("Put back {}".format(snap["title"]), icon="↩️")
+        st.toast(_blip(snap["title"], "Put back on the list"), icon="↩️")
 
 
 @st.dialog("Remove this movie?")
