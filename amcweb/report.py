@@ -386,3 +386,72 @@ def render_page(user_name, meta, movies, when_text=None, show_times=False) -> st
         "<body style='margin:0;background:#0d0d12;padding:28px 20px'>"
         "<div style='max-width:1200px;margin:0 auto'>{}</div></body></html>"
     ).format(_e(user_name), render_fragment(user_name, meta, movies, "p", when_text, show_times))
+
+
+FRAME_JS = """
+<script>
+(function () {
+  // Talks to the website around this frame: +/- taps and 'Open shared list' go out,
+  // who-has-what comes in. Nothing here ever reloads the page or its posters.
+  function names(list) {
+    return list.length < 2 ? list.join('') : list.slice(0, -1).join(', ') + ' & ' + list[list.length - 1];
+  }
+  window.__amcrApply = function (state) {
+    var tracked = (state && state.tracked) || {}, me = state && state.me;
+    document.querySelectorAll('.list-btn[data-mid]').forEach(function (b) {
+      var users = tracked[b.dataset.mid] || [];
+      var mine = users.indexOf(me) >= 0;
+      var others = users.filter(function (u) { return u !== me; });
+      b.disabled = false;
+      b.classList.toggle('remove', mine);
+      b.classList.toggle('add', !mine);
+      b.textContent = mine ? '\\u2212' : '+';
+      b.title = mine ? 'Remove from the shared list'
+                     : 'Add to the shared list' + (others.length ? ' (' + names(others) + ' has it)' : '');
+    });
+    document.querySelectorAll('.who-too[data-mid]').forEach(function (el) {
+      var users = tracked[el.dataset.mid] || [];
+      var others = users.filter(function (u) { return u !== me; });
+      el.textContent = others.length
+        ? '\\uD83D\\uDC65 ' + names(others) + (users.indexOf(me) >= 0 ? ' added this too!' : ' already added this')
+        : '';
+    });
+  };
+  function send(name, value) {
+    try { window.parent.__amcrSend && window.parent.__amcrSend(name, value); } catch (e) {}
+  }
+  document.addEventListener('click', function (e) {
+    var t = e.target;
+    if (!t || !t.closest) return;
+    var lb = t.closest('.list-btn[data-mid]');
+    if (lb) {
+      if (lb.disabled) return;
+      var act = lb.classList.contains('remove') ? 'remove' : 'add';
+      document.querySelectorAll('.list-btn[data-mid="' + lb.dataset.mid + '"]').forEach(function (b) {
+        b.disabled = true; b.textContent = '\\u2026';
+      });
+      send('toggle', act + ':' + lb.dataset.mid + ':' + Date.now());
+      return;
+    }
+    if (t.closest('[data-amcr-goto]')) {
+      document.querySelectorAll('.amcr-overlay.open').forEach(function (m) { m.classList.remove('open'); });
+      document.body.style.overflow = '';
+      send('goto', 'tracker:' + Date.now());
+    }
+  }, true);
+  try { window.__amcrApply(window.parent.__amcrState); } catch (e) {}
+})();
+</script>
+"""
+
+
+def render_frame_page(user_name, meta, movies, when_text=None, show_times=False) -> str:
+    """The report as its own page, shown in a frame inside the website (scrolls like the .html file)."""
+    frag = render_fragment(user_name, meta, movies, "f", when_text, show_times, interactive=True)
+    return (
+        "<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<base target='_blank'></head>"
+        "<body style='margin:0;background:#0d0d12;padding:18px 14px 40px'>"
+        "<div style='max-width:1200px;margin:0 auto'>{}</div>{}{}</body></html>"
+    ).format(frag, JS, FRAME_JS)

@@ -84,115 +84,31 @@ def _cached_run(_store, run_id, kind):
     return meta, movies, (_store.screenshot(meta.get("screenshot_path")) if meta else None)
 
 
-# The run report lives in one page component. It builds the report once, waits for
-# every poster to download, then leaves it alone: later page refreshes only update the
-# +/- buttons and "added this too" notes in place, so nothing reloads while scrolling.
+# The run report is shown as its own page inside a frame, exactly like opening the
+# .html file: the browser scrolls it on its own, separate from Streamlit's page, and
+# it's created once and never reloaded. Taps on +/- and "Open shared list" come out
+# through window.__amcrSend; who-has-what goes in through __amcrApply.
 REPORT_JS = r"""
 export default function (component) {
   const { data, setTriggerValue, parentElement } = component;
-  let box = parentElement.querySelector(':scope > .amcr-host');
-  if (!box) {
-    box = document.createElement('div');
-    box.className = 'amcr-host';
-    parentElement.appendChild(box);
+  window.__amcrSend = setTriggerValue;
+  window.__amcrState = { tracked: data.tracked, me: data.me };
+  let fr = parentElement.querySelector(':scope > iframe.amcr-frame');
+  if (!fr) {
+    fr = document.createElement('iframe');
+    fr.className = 'amcr-frame';
+    fr.title = 'Run report';
+    fr.style.cssText = 'width:100%;border:0;display:block;border-radius:12px;background:#0d0d12;' +
+                       'height:calc(100dvh - 90px);min-height:520px';
+    parentElement.appendChild(fr);
   }
-  box.__send = setTriggerValue;
-  box.__data = data;
-
-  if (box.__html !== data.html) {
-    box.__html = data.html;
-    box.innerHTML = data.html;
+  if (fr.__html !== data.html) {
+    fr.__html = data.html;
+    fr.srcdoc = data.html;
   }
-  if (!box.__bound) { bind(box); box.__bound = true; }
-  applyState(box);
-
-  function names(list) {
-    return list.length < 2 ? list.join('') : list.slice(0, -1).join(', ') + ' & ' + list[list.length - 1];
-  }
-
-  function applyState(box) {
-    const d = box.__data || {};
-    const tracked = d.tracked || {}, me = d.me;
-    box.querySelectorAll('.list-btn[data-mid]').forEach(function (b) {
-      const users = tracked[b.dataset.mid] || [];
-      const mine = users.indexOf(me) >= 0;
-      const others = users.filter(function (u) { return u !== me; });
-      b.disabled = false;
-      b.classList.toggle('remove', mine);
-      b.classList.toggle('add', !mine);
-      b.textContent = mine ? '−' : '+';
-      b.title = mine ? 'Remove from the shared list'
-                     : 'Add to the shared list' + (others.length ? ' (' + names(others) + ' has it)' : '');
-    });
-    box.querySelectorAll('.who-too[data-mid]').forEach(function (el) {
-      const users = tracked[el.dataset.mid] || [];
-      const others = users.filter(function (u) { return u !== me; });
-      el.textContent = others.length
-        ? '👥 ' + names(others) + (users.indexOf(me) >= 0 ? ' added this too!' : ' already added this')
-        : '';
-    });
-  }
-
-  function closeAll() {
-    document.querySelectorAll('.amcr-overlay.open').forEach(function (m) { m.classList.remove('open'); });
-    document.body.style.overflow = '';
-  }
-
-  function applyFilter(root) {
-    const active = Array.from(root.querySelectorAll('.theatre-toggle.active')).map(function (b) { return b.dataset.amcrTid; });
-    root.querySelectorAll('.card').forEach(function (card) {
-      const tids = (card.dataset.theatres || '').split(',');
-      card.classList.toggle('dimmed', !tids.some(function (t) { return active.indexOf(t) >= 0; }));
-    });
-  }
-
-  function bind(box) {
-    if (!window.__amcrEsc) {
-      window.__amcrEsc = true;
-      document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeAll(); });
-    }
-    box.addEventListener('click', function (e) {
-      const t = e.target;
-      if (!t || !t.closest) return;
-      const lb = t.closest('.list-btn[data-mid]');
-      if (lb) {
-        if (lb.disabled) return;
-        const act = lb.classList.contains('remove') ? 'remove' : 'add';
-        box.querySelectorAll('.list-btn[data-mid="' + lb.dataset.mid + '"]').forEach(function (b) {
-          b.disabled = true; b.textContent = '…';
-        });
-        box.__send('toggle', act + ':' + lb.dataset.mid + ':' + Date.now());
-        return;
-      }
-      if (t.closest('[data-amcr-goto]')) {
-        closeAll();
-        window.scrollTo(0, 0);
-        box.__send('goto', 'tracker:' + Date.now());
-        return;
-      }
-      const opener = t.closest('[data-amcr-open]');
-      if (opener) {
-        const m = box.querySelector('#' + CSS.escape(opener.dataset.amcrOpen));
-        if (m) { m.classList.add('open'); document.body.style.overflow = 'hidden'; }
-        return;
-      }
-      if (t.closest('[data-amcr-close]') || t.classList.contains('amcr-overlay')) { closeAll(); return; }
-      const tog = t.closest('[data-amcr-tid]');
-      if (tog) {
-        const root = tog.closest('.amcr');
-        if (tog.classList.contains('active') && root.querySelectorAll('.theatre-toggle.active').length === 1) return;
-        tog.classList.toggle('active');
-        applyFilter(root);
-        return;
-      }
-      const reset = t.closest('[data-amcr-reset]');
-      if (reset) {
-        const r = reset.closest('.amcr');
-        r.querySelectorAll('.theatre-toggle').forEach(function (b) { b.classList.add('active'); });
-        applyFilter(r);
-      }
-    });
-  }
+  try {
+    if (fr.contentWindow && fr.contentWindow.__amcrApply) fr.contentWindow.__amcrApply(window.__amcrState);
+  } catch (e) {}
 }
 """
 _report_component = st.components.v2.component("amc_run_report", js=REPORT_JS, isolate_styles=False)
@@ -201,8 +117,7 @@ _report_component = st.components.v2.component("amc_run_report", js=REPORT_JS, i
 @st.cache_data(max_entries=20, show_spinner=False)
 def _report_html(user_name, run_id, show_times, when, _meta, _movies):
     # Built once per run (+ setting), so the page sends identical HTML and the browser keeps it.
-    return report.render_fragment(user_name, _meta, _movies, prefix="r", when_text=when,
-                                  show_times=show_times, interactive=True)
+    return report.render_frame_page(user_name, _meta, _movies, when, show_times)
 
 
 def demo_mode() -> bool:
@@ -394,6 +309,26 @@ def render_run(store, user, run_id, key, show_shot=True):
     when = _when(meta["run_at"])
     show_times = bool(user.get("show_times"))
 
+    if show_shot and png:
+        with st.expander("📸 Screenshot from this run", expanded=False):
+            st.image(png, width="stretch")
+
+    dl = st.container(horizontal=True, vertical_alignment="center")
+    dl.caption("Download:")
+    d1 = d2 = d3 = dl
+    stamp = str(meta["run_at"])[:16].replace(":", "").replace("T", "_")
+    name = user["display_name"]
+    dl.download_button("🌐 Report (.html)", lambda: report.render_page(name, meta, movies, when, show_times),
+                       "amc_report_{}.html".format(stamp), "text/html", key="{}_html".format(key),
+                       on_click="ignore")
+    if png:
+        d1.download_button("📸 Screenshot", png, "amc_run_{}.png".format(stamp), "image/png",
+                           key="{}_png".format(key), on_click="ignore")
+    d2.download_button("📊 Excel", lambda: exports.run_xlsx(name, meta, movies, png),
+                       "amc_run_{}.xlsx".format(stamp), key="{}_xlsx".format(key), on_click="ignore")
+    d3.download_button("📄 CSV", lambda: exports.run_csv(meta, movies), "amc_run_{}.csv".format(stamp),
+                       "text/csv", key="{}_csv".format(key), on_click="ignore")
+
     tracked = {str(t["amc_movie_id"]): list(t["users"]) for t in store.list_tracker()}
     html = _report_html(user["display_name"], run_id, show_times, when, meta, movies)
     res = _report_component(key="report_{}".format(key),
@@ -414,26 +349,6 @@ def render_run(store, user, run_id, key, show_shot=True):
                            "{} still {} it".format(_names(others), "has" if len(others) == 1 else "have")
                            if others else ""), icon="➖")
         st.rerun()  # refresh the +/- state from the database
-
-    if show_shot and png:
-        with st.expander("📸 Screenshot from this run", expanded=False):
-            st.image(png, width="stretch")
-
-    st.markdown("**Download this run**")
-    dl = st.container(horizontal=True)
-    d1 = d2 = d3 = dl
-    stamp = str(meta["run_at"])[:16].replace(":", "").replace("T", "_")
-    name = user["display_name"]
-    dl.download_button("🌐 Report (.html)", lambda: report.render_page(name, meta, movies, when, show_times),
-                       "amc_report_{}.html".format(stamp), "text/html", key="{}_html".format(key),
-                       on_click="ignore")
-    if png:
-        d1.download_button("📸 Screenshot", png, "amc_run_{}.png".format(stamp), "image/png",
-                           key="{}_png".format(key), on_click="ignore")
-    d2.download_button("📊 Excel", lambda: exports.run_xlsx(name, meta, movies, png),
-                       "amc_run_{}.xlsx".format(stamp), key="{}_xlsx".format(key), on_click="ignore")
-    d3.download_button("📄 CSV", lambda: exports.run_csv(meta, movies), "amc_run_{}.csv".format(stamp),
-                       "text/csv", key="{}_csv".format(key), on_click="ignore")
 
 
 # ── Shared tracker ────────────────────────────────────────────────────────────
