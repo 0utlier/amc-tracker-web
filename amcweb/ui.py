@@ -41,7 +41,7 @@ CSS = """
 .month-h { font-size: .8rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
   color: #00d4a8; margin: 1.6rem 0 .4rem; border-bottom: 1px solid rgba(255,255,255,.08);
   padding-bottom: .3rem; }
-.muted { color: #8a8aa8; font-size: .85rem; }
+.muted { color: #c5c5d4; font-size: .85rem; }
 .pill { display: inline-block; font-size: .68rem; font-weight: 700; padding: 1px 7px;
   border-radius: 4px; background: #000; color: #fff; font-style: italic; letter-spacing: .1em; }
 .stButton > button, .stDownloadButton > button { min-height: 2.8rem; }
@@ -52,7 +52,10 @@ CSS = """
 .summary > div { flex: 1; background: #1e1e32; border: 1px solid rgba(255,255,255,.08);
   border-radius: 12px; padding: .7rem .5rem; text-align: center; }
 .summary b { display: block; font-size: 1.45rem; }
-.summary span { font-size: .75rem; color: #8a8aa8; }
+.summary span { font-size: .75rem; color: #c5c5d4; }
+/* Streamlit's grey text (captions, disabled labels), brought halfway to white */
+[data-testid="stCaptionContainer"] { opacity: .8 !important; }
+label[data-testid="stWidgetLabel"][disabled] p { color: rgba(232, 232, 240, .7) !important; }
 </style>
 """
 
@@ -114,9 +117,116 @@ export default function (component) {
 _report_component = st.components.v2.component("amc_run_report", js=REPORT_JS, isolate_styles=False)
 
 
+# Phones: the report sits right in the page (scrolls with it, like the first version).
+# iPhones draw this smoothly; the frame above is only needed for desktop browsers.
+INLINE_JS = r"""
+export default function (component) {
+  const { data, setTriggerValue, parentElement } = component;
+  let box = parentElement.querySelector(':scope > .amcr-host');
+  if (!box) {
+    box = document.createElement('div');
+    box.className = 'amcr-host';
+    parentElement.appendChild(box);
+  }
+  box.__send = setTriggerValue;
+  box.__data = data;
+  if (box.__html !== data.html) { box.__html = data.html; box.innerHTML = data.html; }
+  if (!box.__bound) { bind(box); box.__bound = true; }
+  applyState(box);
+
+  function names(list) {
+    return list.length < 2 ? list.join('') : list.slice(0, -1).join(', ') + ' & ' + list[list.length - 1];
+  }
+  function applyState(box) {
+    const tracked = (box.__data && box.__data.tracked) || {}, me = box.__data && box.__data.me;
+    box.querySelectorAll('.list-btn[data-mid]').forEach(function (b) {
+      const users = tracked[b.dataset.mid] || [];
+      const mine = users.indexOf(me) >= 0;
+      const others = users.filter(function (u) { return u !== me; });
+      b.disabled = false;
+      b.classList.toggle('remove', mine);
+      b.classList.toggle('add', !mine);
+      b.textContent = mine ? '−' : '+';
+      b.title = mine ? 'Remove from the shared list'
+                     : 'Add to the shared list' + (others.length ? ' (' + names(others) + ' has it)' : '');
+    });
+    box.querySelectorAll('.who-too[data-mid]').forEach(function (el) {
+      const users = tracked[el.dataset.mid] || [];
+      const others = users.filter(function (u) { return u !== me; });
+      el.textContent = others.length
+        ? '👥 ' + names(others) + (users.indexOf(me) >= 0 ? ' added this too!' : ' already added this')
+        : '';
+    });
+  }
+  function closeAll() {
+    document.querySelectorAll('.amcr-overlay.open').forEach(function (m) { m.classList.remove('open'); });
+    document.body.style.overflow = '';
+  }
+  function applyFilter(root) {
+    const active = Array.from(root.querySelectorAll('.theatre-toggle.active')).map(function (b) { return b.dataset.amcrTid; });
+    root.querySelectorAll('.card').forEach(function (card) {
+      const tids = (card.dataset.theatres || '').split(',');
+      card.classList.toggle('dimmed', !tids.some(function (t) { return active.indexOf(t) >= 0; }));
+    });
+  }
+  function bind(box) {
+    if (!window.__amcrEsc) {
+      window.__amcrEsc = true;
+      document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeAll(); });
+    }
+    box.addEventListener('click', function (e) {
+      const t = e.target;
+      if (!t || !t.closest) return;
+      const lb = t.closest('.list-btn[data-mid]');
+      if (lb) {
+        if (lb.disabled) return;
+        const act = lb.classList.contains('remove') ? 'remove' : 'add';
+        box.querySelectorAll('.list-btn[data-mid="' + lb.dataset.mid + '"]').forEach(function (b) {
+          b.disabled = true; b.textContent = '…';
+        });
+        box.__send('toggle', act + ':' + lb.dataset.mid + ':' + Date.now());
+        return;
+      }
+      if (t.closest('[data-amcr-goto]')) {
+        closeAll();
+        window.scrollTo(0, 0);
+        box.__send('goto', 'tracker:' + Date.now());
+        return;
+      }
+      const opener = t.closest('[data-amcr-open]');
+      if (opener) {
+        const m = box.querySelector('#' + CSS.escape(opener.dataset.amcrOpen));
+        if (m) { m.classList.add('open'); document.body.style.overflow = 'hidden'; }
+        return;
+      }
+      if (t.closest('[data-amcr-close]') || t.classList.contains('amcr-overlay')) { closeAll(); return; }
+      const tog = t.closest('[data-amcr-tid]');
+      if (tog) {
+        const root = tog.closest('.amcr');
+        if (tog.classList.contains('active') && root.querySelectorAll('.theatre-toggle.active').length === 1) return;
+        tog.classList.toggle('active');
+        applyFilter(root);
+        return;
+      }
+      const reset = t.closest('[data-amcr-reset]');
+      if (reset) {
+        const r = reset.closest('.amcr');
+        r.querySelectorAll('.theatre-toggle').forEach(function (b) { b.classList.add('active'); });
+        applyFilter(r);
+      }
+    });
+  }
+}
+"""
+_inline_component = st.components.v2.component("amc_run_report_inline", js=INLINE_JS, isolate_styles=False)
+
+
 @st.cache_data(max_entries=20, show_spinner=False)
-def _report_html(user_name, run_id, show_times, when, _meta, _movies):
+def _report_html(user_name, run_id, show_times, when, phone, _meta, _movies):
     # Built once per run (+ setting), so the page sends identical HTML and the browser keeps it.
+    if phone:
+        return report.render_fragment(user_name, _meta, _movies, prefix="r", when_text=when,
+                                      show_times=show_times, interactive=True)
     return report.render_frame_page(user_name, _meta, _movies, when, show_times)
 
 
@@ -345,8 +455,10 @@ def render_run(store, user, run_id, key, show_shot=True, toolbar=None):
                 st.image(png, width="stretch")
 
     tracked = {str(t["amc_movie_id"]): list(t["users"]) for t in store.list_tracker()}
-    html = _report_html(user["display_name"], run_id, show_times, when, meta, movies)
-    res = _report_component(key="report_{}".format(key),
+    phone = _is_phone()
+    html = _report_html(user["display_name"], run_id, show_times, when, phone, meta, movies)
+    res = (_inline_component if phone else _report_component)(
+                            key="report_{}_{}".format(key, "phone" if phone else "desk"),
                             data={"html": html, "tracked": tracked, "me": user["display_name"]},
                             on_toggle_change=lambda: None, on_goto_change=_go_to_tracker)
     if res and res.toggle:

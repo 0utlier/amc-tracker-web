@@ -21,7 +21,7 @@ FMT_CSS = {"IMAX": "imax", "Dolby": "dolby", "ScreenX": "screenx", "4DX": "4dx",
 CSS = """
 <style>
 .amcr{--bg:#0d0d12;--surface:#18182a;--card:#1e1e32;--accent:#e94560;--new:#00d4a8;
-  --text:#e8e8f0;--muted:#6a6a88;--border:rgba(255,255,255,.07);
+  --text:#e8e8f0;--muted:#b5b5c4;--border:rgba(255,255,255,.07);
   color:var(--text);font-family:-apple-system,"Segoe UI",system-ui,sans-serif;line-height:1.4}
 .amcr *{box-sizing:border-box}
 .amcr a{color:inherit;text-decoration:none}

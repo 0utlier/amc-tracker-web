@@ -9,7 +9,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .datefmt import compact, month_label, to_date
 
-BG, SURFACE, TEXT, MUTED, ACCENT, NEW = "#0d0d12", "#1e1e32", "#e8e8f0", "#8a8aa8", "#e94560", "#00d4a8"
+BG, SURFACE, TEXT, MUTED, ACCENT, NEW = "#0d0d12", "#1e1e32", "#e8e8f0", "#c5c5d4", "#e94560", "#00d4a8"
 W, PAD, ROW = 1000, 36, 58
 
 
@@ -64,7 +64,7 @@ def render(user_name: str, meta: dict, movies: list[dict], tz: str | None = None
     y += 40
 
     for t in theatres:
-        d.ellipse((PAD, y + 5, PAD + 11, y + 16), fill=t.get("color", MUTED))
+        d.ellipse((PAD, y + 5, PAD + 11, y + 16), fill=t.get("color", "#8a8aa8"))
         miles = " · {:.1f} mi".format(t["miles"]) if t.get("miles") is not None else ""
         d.text((PAD + 20, y), "{}{}".format(t["name"], miles), font=f_line, fill=TEXT)
         y += 26
