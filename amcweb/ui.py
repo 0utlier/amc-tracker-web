@@ -11,7 +11,6 @@ import streamlit as st
 from . import amc, exports, report, snapshot
 from .config import secret, truthy
 from .datefmt import compact, month_label, parse, to_date
-from .store import LocalStore, SupabaseStore
 
 SECTIONS = ["Home", "Tracker", "Settings", "History"]
 DEFAULT_SLUGS = ["amc-river-east-21", "amc-roosevelt-collection-16",
@@ -68,11 +67,14 @@ def get_store():
 
 
 @st.cache_resource(max_entries=1)
-def _make_store(_stamp):
+def _make_store(stamp):  # no leading underscore: Streamlit must include it in the cache key
+    import importlib
+    from . import store as store_mod
+    importlib.reload(store_mod)  # always build from the newest code
     url, key = secret("SUPABASE_URL"), secret("SUPABASE_KEY")
     if url and key:
-        return SupabaseStore(url, key)
-    return LocalStore(secret("LOCAL_DATA_DIR", "local_data"))
+        return store_mod.SupabaseStore(url, key)
+    return store_mod.LocalStore(secret("LOCAL_DATA_DIR", "local_data"))
 
 
 @st.cache_data(max_entries=40, show_spinner=False)
@@ -96,6 +98,16 @@ export default function (component) {
     });
     setTriggerValue('toggle', v + ':' + Date.now());
   };
+  if (window.__amcrGotoHandler) document.removeEventListener('click', window.__amcrGotoHandler);
+  window.__amcrGotoHandler = function (e) {
+    const go = e.target && e.target.closest && e.target.closest('[data-amcr-goto]');
+    if (!go) return;
+    document.querySelectorAll('.amcr-overlay.open').forEach(function (m) { m.classList.remove('open'); });
+    document.body.style.overflow = '';
+    window.scrollTo(0, 0);
+    setTriggerValue('goto', 'tracker:' + Date.now());
+  };
+  document.addEventListener('click', window.__amcrGotoHandler);
   document.addEventListener('click', window.__amcrListHandler);
 }
 """
@@ -140,6 +152,10 @@ def _when(iso) -> str:
 
 def _go(section):
     st.session_state["section"] = section
+
+
+def _go_to_tracker():
+    st.session_state["section"] = "Tracker"
 
 
 # ── Landing page (the bare URL) ───────────────────────────────────────────────
@@ -276,7 +292,8 @@ def render_run(store, user, run_id, key, show_shot=True):
     when = _when(meta["run_at"])
     show_times = bool(user.get("show_times"))
 
-    tap = _list_listener(key="list_{}".format(key), on_toggle_change=lambda: None)
+    tap = _list_listener(key="list_{}".format(key), on_toggle_change=lambda: None,
+                         on_goto_change=_go_to_tracker)
     if tap and tap.toggle:
         action, mid = tap.toggle.split(":")[:2]
         m = next((x for x in movies if str(x.get("amc_movie_id")) == mid), None)
@@ -287,12 +304,9 @@ def render_run(store, user, run_id, key, show_shot=True):
             store.remove_from_tracker(user["display_name"], m["amc_movie_id"])
             st.toast("Removed {} from the list".format(m["title"]), icon="➖")
 
-    tracked = {}
-    for t in store.list_tracker():
-        tracked[t["amc_movie_id"]] = ("me" if user["display_name"] in t["users"]
-                                      else ", ".join(t["users"]) or "someone")
+    tracked = {t["amc_movie_id"]: list(t["users"]) for t in store.list_tracker()}
     st.html(report.render_fragment(user["display_name"], meta, movies, prefix=key, when_text=when,
-                                   show_times=show_times, tracked=tracked),
+                                   show_times=show_times, tracked=tracked, me=user["display_name"]),
             unsafe_allow_javascript=True)
 
     if show_shot and png:

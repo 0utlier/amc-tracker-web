@@ -92,6 +92,11 @@ CSS = """
 .amcr .modal-h{font-size:1rem;font-weight:600;margin:0 0 4px;padding-right:28px}
 .amcr .modal-meta{font-size:.78rem;color:var(--muted);margin-bottom:16px}
 .amcr .section-label{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:14px}
+.amcr .list-row{margin:-4px 0 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.amcr .who-too{font-size:.8rem;color:var(--new);font-weight:600}
+.amcr .goto-btn{background:var(--surface);color:var(--text);border:1px solid rgba(255,255,255,.15);
+  border-radius:20px;padding:6px 14px;font-size:.78rem;cursor:pointer;font-family:inherit}
+.amcr .goto-btn:hover{border-color:var(--accent)}
 .amcr .card-foot{margin-top:auto;display:flex;align-items:stretch;border-top:1px solid var(--border)}
 .amcr .card-foot .dates-btn{margin-top:0;border-top:none;flex:1;min-width:0}
 .amcr .list-btn{flex:0 0 auto;width:34px;height:34px;margin:auto 10px auto 0;border-radius:50%;border:none;
@@ -191,20 +196,40 @@ def _fmt_date(d):
         return _e(d)
 
 
-def _list_button(m, tracked):
+def _names(names):
+    names = [_e(n) for n in names]
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " &amp; " + names[-1]
+
+
+def _list_button(m, tracked, me):
     """Green + (add me to the shared list) or red - (take me off). None = no button (downloaded file)."""
     if tracked is None or not m.get("amc_movie_id"):
         return ""
-    state = tracked.get(m["amc_movie_id"])
-    if state == "me":
+    users = tracked.get(m["amc_movie_id"]) or []
+    others = [u for u in users if u != me]
+    if me in users:
         return ('<button class="list-btn remove" data-amcr-list="remove:{}" title="Remove from the shared list" '
                 'aria-label="Remove from list">&minus;</button>').format(m["amc_movie_id"])
-    tip = "Add to the shared list" + (" ({} has it)".format(_e(state)) if state else "")
+    tip = "Add to the shared list" + (" ({} has it)".format(", ".join(map(_e, others))) if others else "")
     return ('<button class="list-btn add" data-amcr-list="add:{}" title="{}" '
             'aria-label="Add to list">+</button>').format(m["amc_movie_id"], tip)
 
 
-def _card_and_modal(prefix, m, theatre_info, is_new, show_times=False, tracked=None):
+def _modal_list_info(m, tracked, me):
+    """'Kevin added this too!' line + 'Open shared list' button for the pop-up."""
+    if tracked is None:
+        return ""
+    users = tracked.get(m.get("amc_movie_id")) or []
+    others = [u for u in users if u != me]
+    note = ""
+    if others:
+        verb = "added this too!" if me in users else "already added this"
+        note = '<span class="who-too">&#128101; {} {}</span>'.format(_names(others), verb)
+    return ('<div class="list-row">{}<button class="goto-btn" data-amcr-goto="1">'
+            '&#128203; Open shared list</button></div>').format(note)
+
+
+def _card_and_modal(prefix, m, theatre_info, is_new, show_times=False, tracked=None, me=None):
     sid = "{}-{}".format(prefix, m.get("amc_movie_id") or abs(hash(m["title"])))
     title = _e(m["title"])
     url = m.get("movie_url") or ""
@@ -261,10 +286,10 @@ def _card_and_modal(prefix, m, theatre_info, is_new, show_times=False, tracked=N
     modal = (
         '<div class="amcr-overlay" id="{sid}"><div class="modal">'
         '<button class="modal-close" data-amcr-close="1" aria-label="Close">&times;</button>'
-        '<div class="modal-h">{lo}{title}{lc}</div><div class="modal-meta">{meta}</div>'
+        '<div class="modal-h">{lo}{title}{lc}</div><div class="modal-meta">{meta}</div>{listinfo}'
         '<div class="section-label">{tc} theatre{tpl} &middot; {td} show date{dpl}</div>{sections}'
         '</div></div>'
-    ).format(sid=sid, title=title, meta=meta, lo=lo, lc=lc, tc=tc, tpl="" if tc == 1 else "s",
+    ).format(sid=sid, title=title, meta=meta, lo=lo, lc=lc, tc=tc, listinfo=_modal_list_info(m, tracked, me), tpl="" if tc == 1 else "s",
              td=total_dates, dpl="" if total_dates == 1 else "s", sections="".join(sections))
 
     card = (
@@ -274,7 +299,7 @@ def _card_and_modal(prefix, m, theatre_info, is_new, show_times=False, tracked=N
         '{imax}<div class="first-seen">First showing: {first}</div></div>'
         '<div class="card-foot"><button class="dates-btn" data-amcr-open="{sid}">&#128197; {td} date{dpl} '
         '&middot; {tc} theatre{tpl}<br><span>tap to expand &rsaquo;</span></button>{listbtn}</div></div>'
-    ).format(listbtn=_list_button(m, tracked),cls=" isnew" if is_new else "", tids=",".join(theatres.keys()),
+    ).format(listbtn=_list_button(m, tracked, me),cls=" isnew" if is_new else "", tids=",".join(theatres.keys()),
              badge='<span class="badge">NEW</span>' if is_new else "", lo=lo, lc=lc, img=img,
              dots=dots, title=title, meta=meta, imax=imax, first=first, sid=sid,
              td=total_dates, dpl="" if total_dates == 1 else "s", tc=tc, tpl="" if tc == 1 else "s")
@@ -282,8 +307,8 @@ def _card_and_modal(prefix, m, theatre_info, is_new, show_times=False, tracked=N
 
 
 def render_fragment(user_name, meta, movies, prefix="r", when_text=None, show_times=False,
-                    tracked=None) -> str:
-    """tracked: {amc_movie_id: "me" | "<names>"} for movies already on the shared list."""
+                    tracked=None, me=None) -> str:
+    """tracked: {amc_movie_id: [names]} for movies on the shared list; me = this person's name."""
     """The report as an embeddable block (CSS + markup + JS)."""
     theatres = meta.get("theatres") or []
     theatre_info = {str(t["id"]): t for t in theatres}
@@ -292,7 +317,7 @@ def render_fragment(user_name, meta, movies, prefix="r", when_text=None, show_ti
 
     cards, modals, new_cards = [], [], []
     for m in movies:
-        card, modal = _card_and_modal(prefix, m, theatre_info, bool(m.get("is_new")), show_times, tracked)
+        card, modal = _card_and_modal(prefix, m, theatre_info, bool(m.get("is_new")), show_times, tracked, me)
         cards.append(card)
         modals.append(modal)
         if m.get("is_new"):
