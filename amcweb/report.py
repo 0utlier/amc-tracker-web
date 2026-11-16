@@ -49,7 +49,7 @@ CSS = """
 .amcr .r-section{margin-top:32px}
 .amcr .r-h2{font-size:.8rem;font-weight:600;margin:0 0 16px;letter-spacing:.09em;text-transform:uppercase}
 .amcr .r-h2.new{color:var(--new)} .amcr .r-h2.all{color:var(--muted)}
-.amcr .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px}
+.amcr .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:14px}
 .amcr .card{background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;
   position:relative;transition:transform .12s,border-color .12s,opacity .2s;display:flex;flex-direction:column}
 .amcr .card:hover{transform:translateY(-2px);border-color:rgba(255,255,255,.14)}
@@ -452,6 +452,6 @@ def render_frame_page(user_name, meta, movies, when_text=None, show_times=False)
         "<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         "<base target='_blank'></head>"
-        "<body style='margin:0;background:#0d0d12;padding:18px 14px 40px'>"
-        "<div style='max-width:1200px;margin:0 auto'>{}</div>{}{}</body></html>"
+        "<body style='margin:0;background:#0d0d12;padding:18px 8px 40px'>"
+        "<div>{}</div>{}{}</body></html>"
     ).format(frag, JS, FRAME_JS)
