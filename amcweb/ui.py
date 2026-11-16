@@ -201,6 +201,8 @@ def user_page(slug):
         st.session_state["slug"] = slug
         st.session_state["section"] = st.query_params.get("tab", "Home").title()
         st.session_state.pop("current_run", None)
+    if st.session_state.pop("goto_home", False):  # set before the tab bar is drawn
+        st.session_state["section"] = "Home"
     if st.session_state.get("section") not in SECTIONS:  # e.g. tapped the selected tab again
         st.session_state["section"] = st.session_state.get("section_last", "Home")
     st.session_state["section_last"] = st.session_state["section"]
@@ -224,6 +226,23 @@ def user_page(slug):
 
 # ── Home ──────────────────────────────────────────────────────────────────────
 def home(store, user):
+    if st.session_state.get("current_run"):
+        # Results showing: one slim line, so the report starts near the top of the page.
+        bar = st.container(horizontal=True, vertical_alignment="center", key="results_bar")
+        where = "ZIP {}".format(user["zip"]) if user.get("zip") else "Default theaters"
+        phone = _is_phone()
+        if phone:
+            where = "ZIP {}".format(user["zip"]) if user.get("zip") else "Default"
+            bar.markdown("**{}** · {} · {}d".format(user["display_name"], where, user["days"]))
+        else:
+            bar.markdown("**Hi, {}** &nbsp;·&nbsp; {} · {} days".format(user["display_name"], where, user["days"]))
+        if bar.button("▶️" if phone else "▶️ Run again", type="primary", help="Run again"):
+            if run_search(store, user, user.get("zip"), user["theatre_count"], user["days"]):
+                st.rerun()
+            return
+        render_run(store, user, st.session_state["current_run"], key="home", show_shot=False, toolbar=bar)
+        return
+
     st.title("Hi, {} 👋".format(user["display_name"]))
     st.markdown(
         '<div class="summary"><div><b>{}</b><span>ZIP code</span></div>'
@@ -236,19 +255,16 @@ def home(store, user):
                    "NewCity and Village Crossing.")
 
     if st.button("▶️  Run Using My Defaults", type="primary", width="stretch"):
-        run_search(store, user, user.get("zip"), user["theatre_count"], user["days"])
+        if run_search(store, user, user.get("zip"), user["theatre_count"], user["days"]):
+            st.rerun()
     b1, b2 = st.columns(2)
     b1.button("⚙️  Change Search Settings", width="stretch", on_click=_go, args=("Settings",))
     b2.button("🕘  My Last 5 Runs", width="stretch", on_click=_go, args=("History",))
 
-    if st.session_state.get("current_run"):
-        st.divider()
-        st.subheader("Results from this run")
-        render_run(store, user, st.session_state["current_run"], key="home", show_shot=False)
-
 
 def run_search(store, user, zip_code, count, days):
-    """Runs the AMC search, saves it to history, and shows it on Home."""
+    """Runs the AMC search, saves it to history, and shows it on Home. Returns True on success."""
+    ok = False
     with st.status("Searching AMC…", expanded=True) as status:
         try:
             if demo_mode():
@@ -291,15 +307,17 @@ def run_search(store, user, zip_code, count, days):
             st.session_state["current_run"] = run_id
             status.update(label="Found {} movies".format(len(results["movies"])),
                           state="complete", expanded=False)
+            ok = True
         except amc.AmcError as e:
             status.update(label="AMC error: {}".format(e), state="error")
         except Exception as e:  # keep the page alive and show what broke
             status.update(label="Something went wrong: {}".format(e), state="error")
             st.exception(e)
+    return ok
 
 
 # ── Run results (used on Home and in History) ────────────────────────────────
-def render_run(store, user, run_id, key, show_shot=True):
+def render_run(store, user, run_id, key, show_shot=True, toolbar=None):
     meta, movies, png = _cached_run(store, run_id, store.kind)
     if not meta:
         _cached_run.clear()
@@ -309,25 +327,22 @@ def render_run(store, user, run_id, key, show_shot=True):
     when = _when(meta["run_at"])
     show_times = bool(user.get("show_times"))
 
-    if show_shot and png:
-        with st.expander("📸 Screenshot from this run", expanded=False):
-            st.image(png, width="stretch")
-
-    dl = st.container(horizontal=True, vertical_alignment="center")
-    dl.caption("Download:")
-    d1 = d2 = d3 = dl
     stamp = str(meta["run_at"])[:16].replace(":", "").replace("T", "_")
     name = user["display_name"]
-    dl.download_button("🌐 Report (.html)", lambda: report.render_page(name, meta, movies, when, show_times),
-                       "amc_report_{}.html".format(stamp), "text/html", key="{}_html".format(key),
-                       on_click="ignore")
-    if png:
-        d1.download_button("📸 Screenshot", png, "amc_run_{}.png".format(stamp), "image/png",
-                           key="{}_png".format(key), on_click="ignore")
-    d2.download_button("📊 Excel", lambda: exports.run_xlsx(name, meta, movies, png),
-                       "amc_run_{}.xlsx".format(stamp), key="{}_xlsx".format(key), on_click="ignore")
-    d3.download_button("📄 CSV", lambda: exports.run_csv(meta, movies), "amc_run_{}.csv".format(stamp),
-                       "text/csv", key="{}_csv".format(key), on_click="ignore")
+    with (toolbar or st.container()).popover("⬇️" if _is_phone() else "⬇️ Download", help="Download this run"):
+        st.download_button("🌐 Report (.html)", lambda: report.render_page(name, meta, movies, when, show_times),
+                           "amc_report_{}.html".format(stamp), "text/html", key="{}_html".format(key),
+                           on_click="ignore", width="stretch")
+        st.download_button("📊 Excel", lambda: exports.run_xlsx(name, meta, movies, png),
+                           "amc_run_{}.xlsx".format(stamp), key="{}_xlsx".format(key), on_click="ignore",
+                           width="stretch")
+        st.download_button("📄 CSV", lambda: exports.run_csv(meta, movies), "amc_run_{}.csv".format(stamp),
+                           "text/csv", key="{}_csv".format(key), on_click="ignore", width="stretch")
+        if png:
+            st.download_button("📸 Screenshot", png, "amc_run_{}.png".format(stamp), "image/png",
+                               key="{}_png".format(key), on_click="ignore", width="stretch")
+            if show_shot:
+                st.image(png, width="stretch")
 
     tracked = {str(t["amc_movie_id"]): list(t["users"]) for t in store.list_tracker()}
     html = _report_html(user["display_name"], run_id, show_times, when, meta, movies)
@@ -584,10 +599,10 @@ def settings(store, user):
     st.divider()
     st.caption("Want a one-off search without changing your defaults?")
     if st.button("▶️ Run with these settings (don't save)", width="stretch", disabled=not valid):
-        run_search(store, user, z or None, int(st.session_state["set_count"]),
-                   int(st.session_state["set_days"]))
-    if st.session_state.get("current_run"):
-        st.button("See results on Home →", on_click=_go, args=("Home",))
+        if run_search(store, user, z or None, int(st.session_state["set_count"]),
+                      int(st.session_state["set_days"])):
+            st.session_state["goto_home"] = True
+            st.rerun()
 
     st.divider()
     st.markdown("**Display**")
@@ -607,7 +622,6 @@ def settings(store, user):
 
 # ── History ───────────────────────────────────────────────────────────────────
 def history(store, user):
-    st.title("🕘 My last 5 runs")
     runs = store.list_runs(user["slug"])
     if not runs:
         st.info("No runs yet. Hit “Run Using My Defaults” on Home.")
@@ -615,7 +629,10 @@ def history(store, user):
     labels = {r["id"]: "{}  ·  {} · {} theaters · {} days · {} movies".format(
         _when(r["run_at"]), ("ZIP " + r["zip"]) if r.get("zip") else "Default theaters", r.get("theatre_count"), r.get("days"),
         r.get("movie_count", 0)) for r in runs}
-    run_id = st.radio("Run", list(labels), format_func=labels.get, key="run_hist_pick",
-                      label_visibility="collapsed")
-    st.divider()
-    render_run(store, user, run_id, key="hist", show_shot=True)
+    phone = _is_phone()
+    if phone:  # short labels so the picker and download menu share one line
+        labels = {r["id"]: "{} · {} movies".format(_when(r["run_at"]), r.get("movie_count", 0)) for r in runs}
+    bar = st.container(horizontal=True, vertical_alignment="center", key="results_bar_hist")
+    run_id = bar.selectbox("Run", list(labels), format_func=labels.get, key="run_hist_pick",
+                           label_visibility="collapsed", width=270 if phone else 430)
+    render_run(store, user, run_id, key="hist", show_shot=True, toolbar=bar)
