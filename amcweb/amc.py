@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import random
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
@@ -65,6 +66,23 @@ def theatre_coords(t: dict):
             if sub.get(lat_k) is not None and sub.get(lon_k) is not None:
                 return float(sub[lat_k]), float(sub[lon_k])
     return None, None
+
+
+def theatre_page_url(t: dict, fallback_market: str = "") -> str:
+    """AMC's web page for a theatre, e.g. https://www.amctheatres.com/movie-theatres/chicago/amc-river-east-21"""
+    for k in ("websiteUrl", "url", "theatreUrl", "webUrl"):
+        v = t.get(k)
+        if isinstance(v, str) and "movie-theatres/" in v:
+            v = v.split("?")[0].rstrip("/")
+            return "https://www.amctheatres.com" + v if v.startswith("/") else v
+    loc = t.get("location") if isinstance(t.get("location"), dict) else {}
+    market = (loc.get("marketSlug") or t.get("marketSlug")
+              or re.sub(r"[^a-z0-9]+", "-", str(loc.get("marketName") or t.get("marketName") or "").lower()).strip("-")
+              or fallback_market)
+    slug = t.get("slug")
+    if slug and market:
+        return "https://www.amctheatres.com/movie-theatres/{}/{}".format(market, slug)
+    return ""
 
 
 def _fmt_time(st: dict) -> str:
@@ -225,7 +243,7 @@ def nearest(all_theatres: list[dict], lat, lon, count) -> list[dict]:
     scored.sort(key=lambda x: x[0])
     return [
         {"id": t["id"], "name": t.get("longName") or t.get("name") or str(t["id"]),
-         "slug": t.get("slug", ""), "miles": round(dist, 1),
+         "slug": t.get("slug", ""), "miles": round(dist, 1), "url": theatre_page_url(t),
          "color": THEATRE_COLORS[i % len(THEATRE_COLORS)]}
         for i, (dist, t) in enumerate(scored[:count])
     ]
@@ -240,6 +258,7 @@ def by_slugs(all_theatres: list[dict], slugs: list[str]) -> list[dict]:
         if not t:
             continue
         out.append({"id": t["id"], "name": t.get("longName") or t.get("name") or slug, "slug": slug,
+                    "url": theatre_page_url(t, fallback_market="chicago"),
                     "miles": None, "color": THEATRE_COLORS[len(out) % len(THEATRE_COLORS)]})
     return out
 
@@ -256,7 +275,8 @@ def demo_theatres(count: int, no_zip: bool = False) -> list[dict]:
     names = ["AMC River East 21", "AMC Roosevelt Collection 16", "AMC NewCity 14",
              "AMC Village Crossing 18", "AMC Block 37", "AMC Evanston 12",
              "AMC Yorktown 17", "AMC Oakbrook Center 12"]
-    return [{"id": 1000 + i, "name": names[i % len(names)], "slug": "", "miles": None if no_zip else round(1.2 + i * 2.3, 1),
+    return [{"id": 1000 + i, "name": names[i % len(names)], "slug": "",
+             "url": "https://www.amctheatres.com/movie-theatres/chicago/" + re.sub(r"[^a-z0-9]+", "-", names[i % len(names)].lower()), "miles": None if no_zip else round(1.2 + i * 2.3, 1),
              "color": THEATRE_COLORS[i % len(THEATRE_COLORS)]} for i in range(count)]
 
 

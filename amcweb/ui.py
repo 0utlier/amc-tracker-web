@@ -75,6 +75,13 @@ def _make_store(_stamp):
     return LocalStore(secret("LOCAL_DATA_DIR", "local_data"))
 
 
+@st.cache_data(max_entries=40, show_spinner=False)
+def _cached_run(_store, run_id, kind):
+    # Saved runs never change, so each one is fetched from the database only once.
+    meta, movies = _store.get_run(run_id)
+    return meta, movies, (_store.screenshot(meta.get("screenshot_path")) if meta else None)
+
+
 def demo_mode() -> bool:
     return truthy(secret("DEMO_MODE", "")) or not secret("AMC_VENDOR_KEY")
 
@@ -240,8 +247,9 @@ def run_search(store, user, zip_code, count, days):
 
 # ── Run results (used on Home and in History) ────────────────────────────────
 def render_run(store, user, run_id, key, show_shot=True):
-    meta, movies = store.get_run(run_id)
+    meta, movies, png = _cached_run(store, run_id, store.kind)
     if not meta:
+        _cached_run.clear()
         st.warning("That run is no longer saved.")
         return
     movies = sorted(movies, key=lambda m: (str(m["dates"][0]) if m["dates"] else "", m["title"].lower()))
@@ -251,7 +259,6 @@ def render_run(store, user, run_id, key, show_shot=True):
                                    show_times=show_times),
             unsafe_allow_javascript=True)
 
-    png = store.screenshot(meta.get("screenshot_path"))
     if show_shot and png:
         with st.expander("📸 Screenshot from this run", expanded=False):
             st.image(png, width="stretch")
@@ -260,15 +267,17 @@ def render_run(store, user, run_id, key, show_shot=True):
     dl = st.container(horizontal=True)
     d1 = d2 = d3 = dl
     stamp = str(meta["run_at"])[:16].replace(":", "").replace("T", "_")
-    dl.download_button("🌐 Report (.html)", report.render_page(user["display_name"], meta, movies, when, show_times),
-                       "amc_report_{}.html".format(stamp), "text/html", key="{}_html".format(key))
+    name = user["display_name"]
+    dl.download_button("🌐 Report (.html)", lambda: report.render_page(name, meta, movies, when, show_times),
+                       "amc_report_{}.html".format(stamp), "text/html", key="{}_html".format(key),
+                       on_click="ignore")
     if png:
         d1.download_button("📸 Screenshot", png, "amc_run_{}.png".format(stamp), "image/png",
-                           key="{}_png".format(key))
-    d2.download_button("📊 Excel", exports.run_xlsx(user["display_name"], meta, movies, png),
-                       "amc_run_{}.xlsx".format(stamp), key="{}_xlsx".format(key))
-    d3.download_button("📄 CSV", exports.run_csv(meta, movies), "amc_run_{}.csv".format(stamp),
-                       "text/csv", key="{}_csv".format(key))
+                           key="{}_png".format(key), on_click="ignore")
+    d2.download_button("📊 Excel", lambda: exports.run_xlsx(name, meta, movies, png),
+                       "amc_run_{}.xlsx".format(stamp), key="{}_xlsx".format(key), on_click="ignore")
+    d3.download_button("📄 CSV", lambda: exports.run_csv(meta, movies), "amc_run_{}.csv".format(stamp),
+                       "text/csv", key="{}_csv".format(key), on_click="ignore")
 
     if not movies:
         return
@@ -357,10 +366,10 @@ def tracker(store, user):
                                  label_visibility="collapsed") or "Table"
     bar.button("🔄", help="Refresh to see everyone's latest changes")
     with bar.popover("⬇️ Export"):
-        st.download_button("📊 Excel (.xlsx)", exports.tracker_xlsx(movies), "amc_tracker.xlsx",
-                           width="stretch")
-        st.download_button("📄 CSV (.csv)", exports.tracker_csv(movies), "amc_tracker.csv",
-                           "text/csv", width="stretch")
+        st.download_button("📊 Excel (.xlsx)", lambda: exports.tracker_xlsx(movies), "amc_tracker.xlsx",
+                           width="stretch", on_click="ignore")
+        st.download_button("📄 CSV (.csv)", lambda: exports.tracker_csv(movies), "amc_tracker.csv",
+                           "text/csv", width="stretch", on_click="ignore")
 
     if not movies:
         st.info("The tracker is empty. Run a search on Home and add movies from the results.")

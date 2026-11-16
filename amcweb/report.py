@@ -100,6 +100,9 @@ CSS = """
 .amcr .date-chip{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:5px 10px;
   font-size:.76rem;display:flex;flex-direction:column;gap:3px}
 .amcr .date-chip .d{display:flex;align-items:center;gap:6px}
+.amcr .date-chip a.dlink{text-decoration:underline;text-decoration-color:rgba(255,255,255,.25);
+  text-underline-offset:3px}
+.amcr .date-chip a.dlink:hover{color:#fff;text-decoration-color:currentColor}
 .amcr .date-chip .t{font-size:.66rem;color:var(--muted)}
 .amcr .date-chip .t a{text-decoration:underline;text-decoration-color:rgba(255,255,255,.2)}
 .amcr .date-chip .t a:hover{color:var(--text)}
@@ -219,8 +222,12 @@ def _card_and_modal(prefix, m, theatre_info, is_new, show_times=False):
             times = ", ".join(
                 '<a href="{}" target="_blank" rel="noopener">{}</a>'.format(_e(s["url"]), _e(s["time"]))
                 if s.get("url") else _e(s["time"]) for s in shows)
+            label = _fmt_date(d)
+            if info.get("url"):
+                label = '<a class="dlink" href="{}/showtimes?date={}" target="_blank" rel="noopener">{}</a>'.format(
+                    _e(info["url"]), _e(str(d)[:10]), label)
             chips.append('<div class="date-chip"><div class="d">{}{}</div>{}</div>'.format(
-                _fmt_date(d), " " + _badge("IMAX") if has_imax else "",
+                label, " " + _badge("IMAX") if has_imax else "",
                 '<div class="t">{}</div>'.format(times) if show_times else ""))
         sections.append(
             '<div class="modal-theatre"><div class="modal-theatre-label" style="color:{c}">'
