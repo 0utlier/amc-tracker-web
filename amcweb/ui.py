@@ -341,6 +341,11 @@ def user_page(slug):
 
 # ── Home ──────────────────────────────────────────────────────────────────────
 def home(store, user):
+    if not st.session_state.get("current_run"):
+        # Coming back to the site: show the latest saved run, just as it looked when it finished.
+        latest = store.list_runs(user["slug"])[:1]
+        if latest:
+            st.session_state["current_run"] = latest[0]["id"]
     if st.session_state.get("current_run"):
         # Results showing: one slim line, so the report starts near the top of the page.
         bar = st.container(horizontal=True, vertical_alignment="center", key="results_bar")
