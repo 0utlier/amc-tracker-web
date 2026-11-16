@@ -231,6 +231,19 @@ def nearest(all_theatres: list[dict], lat, lon, count) -> list[dict]:
     ]
 
 
+def by_slugs(all_theatres: list[dict], slugs: list[str]) -> list[dict]:
+    """The default theaters, in the order given (no distance — there's no ZIP)."""
+    index = {t.get("slug"): t for t in all_theatres}
+    out = []
+    for slug in slugs:
+        t = index.get(slug)
+        if not t:
+            continue
+        out.append({"id": t["id"], "name": t.get("longName") or t.get("name") or slug, "slug": slug,
+                    "miles": None, "color": THEATRE_COLORS[len(out) % len(THEATRE_COLORS)]})
+    return out
+
+
 # ── Demo data (used when no AMC key is configured, for trying the site) ───────
 _DEMO_TITLES = [
     "Starlight Express", "The Long Harbor", "Paper Moons", "Cold Open",
@@ -239,11 +252,11 @@ _DEMO_TITLES = [
 ]
 
 
-def demo_theatres(count: int) -> list[dict]:
+def demo_theatres(count: int, no_zip: bool = False) -> list[dict]:
     names = ["AMC River East 21", "AMC Roosevelt Collection 16", "AMC NewCity 14",
              "AMC Village Crossing 18", "AMC Block 37", "AMC Evanston 12",
              "AMC Yorktown 17", "AMC Oakbrook Center 12"]
-    return [{"id": 1000 + i, "name": names[i % len(names)], "slug": "", "miles": round(1.2 + i * 2.3, 1),
+    return [{"id": 1000 + i, "name": names[i % len(names)], "slug": "", "miles": None if no_zip else round(1.2 + i * 2.3, 1),
              "color": THEATRE_COLORS[i % len(THEATRE_COLORS)]} for i in range(count)]
 
 

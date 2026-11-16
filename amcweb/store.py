@@ -17,6 +17,8 @@ from pathlib import Path
 from .datefmt import to_date
 
 KEEP_RUNS = 5
+DEFAULT_PREFS = {"zip": None, "theatre_count": 5, "days": 90}
+CARD_FIELDS = ("poster", "rating", "runtime", "genre")
 BUCKET = "run-screenshots"
 BOOL_FIELDS = ("alist_available", "jonathan_purchased", "needs_refund", "needs_alternative")
 EDITABLE = {"title", "users", "notes", *BOOL_FIELDS}
@@ -113,6 +115,8 @@ class SupabaseStore:
             "movie_url": m.get("movie_url"), "is_imax": bool(m.get("is_imax")),
             "formats": m.get("formats", []), "theatre_count": m.get("theatre_count", 0),
             "dates": [str(d) for d in m["dates"]], "theatres": m.get("theatres", {}),
+            "is_new": bool(m.get("is_new")),
+            **{f: m.get(f) or None for f in CARD_FIELDS},
         } for m in movies]
         for i in range(0, len(rows), 200):
             self.db.table("run_results").insert(rows[i:i + 200]).execute()
@@ -132,6 +136,39 @@ class SupabaseStore:
             except Exception:
                 pass  # a leftover image is harmless; don't fail the run over it
         self.db.table("runs").delete().in_("id", [r["id"] for r in old]).execute()
+
+    def flag_new(self, slug, movies):
+        """Mark movies this person has never seen before (m['is_new']) and remember them."""
+        user = self.get_user(slug)
+        ids = [m["amc_movie_id"] for m in movies if m.get("amc_movie_id")]
+        seen = set()
+        for i in range(0, len(ids), 150):
+            rows = (self.db.table("seen_movies").select("amc_movie_id").eq("user_id", user["id"])
+                    .in_("amc_movie_id", ids[i:i + 150]).execute().data)
+            seen.update(r["amc_movie_id"] for r in rows)
+        fresh = []
+        for m in movies:
+            m["is_new"] = m.get("amc_movie_id") not in seen
+            if m["is_new"]:
+                fresh.append({"user_id": user["id"], "amc_movie_id": m["amc_movie_id"], "title": m["title"]})
+        for i in range(0, len(fresh), 200):
+            self.db.table("seen_movies").upsert(
+                fresh[i:i + 200], on_conflict="user_id,amc_movie_id", ignore_duplicates=True).execute()
+        return movies
+
+    def reset_user(self, slug):
+        """Delete this person's runs, screenshots and seen-history; settings back to defaults."""
+        user = self.get_user(slug)
+        runs = self.db.table("runs").select("id, screenshot_path").eq("user_id", user["id"]).execute().data
+        paths = [r["screenshot_path"] for r in runs if r.get("screenshot_path")]
+        if paths:
+            try:
+                self.db.storage.from_(BUCKET).remove(paths)
+            except Exception:
+                pass
+        self.db.table("runs").delete().eq("user_id", user["id"]).execute()
+        self.db.table("seen_movies").delete().eq("user_id", user["id"]).execute()
+        self.db.table("users").update(DEFAULT_PREFS).eq("id", user["id"]).execute()
 
     def list_runs(self, slug):
         user = self.get_user(slug)
@@ -175,7 +212,7 @@ class LocalStore:
                     {"id": 2, "slug": "meagan", "display_name": "Meagan", "zip": None, "theatre_count": 5, "days": 90},
                     {"id": 3, "slug": "kevin", "display_name": "Kevin", "zip": None, "theatre_count": 5, "days": 90},
                 ],
-                "movies": [], "runs": [], "run_results": [], "next_id": 1,
+                "movies": [], "runs": [], "run_results": [], "seen": {}, "next_id": 1,
             })
 
     def _read(self):
@@ -275,6 +312,31 @@ class LocalStore:
             data["run_results"] = [r for r in data["run_results"] if r["run_id"] not in drop]
             self._write(data)
             return run_id
+
+    def flag_new(self, slug, movies):
+        with self._lock:
+            data = self._read()
+            seen = set(data.setdefault("seen", {}).get(slug, []))
+            for m in movies:
+                m["is_new"] = m.get("amc_movie_id") not in seen
+                seen.add(m.get("amc_movie_id"))
+            data["seen"][slug] = sorted(x for x in seen if x is not None)
+            self._write(data)
+        return movies
+
+    def reset_user(self, slug):
+        with self._lock:
+            data = self._read()
+            user = next(u for u in data["users"] if u["slug"] == slug)
+            user.update(DEFAULT_PREFS)
+            mine = {r["id"] for r in data["runs"] if r["user_id"] == user["id"]}
+            for r in data["runs"]:
+                if r["id"] in mine and r.get("screenshot_path"):
+                    (self.folder / "screenshots" / r["screenshot_path"]).unlink(missing_ok=True)
+            data["runs"] = [r for r in data["runs"] if r["id"] not in mine]
+            data["run_results"] = [r for r in data["run_results"] if r["run_id"] not in mine]
+            data.setdefault("seen", {}).pop(slug, None)
+            self._write(data)
 
     def list_runs(self, slug):
         user = self.get_user(slug)

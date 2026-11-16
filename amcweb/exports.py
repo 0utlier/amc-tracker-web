@@ -113,7 +113,7 @@ def run_xlsx(user_name, meta, movies, png: bytes | None) -> bytes:
     ws = wb.active
     ws.title = "Search settings"
     for row in (["User", user_name], ["Run date & time", _fmt_run_time(meta["run_at"])],
-                ["ZIP code", meta.get("zip") or ""], ["Theaters searched", meta.get("theatre_count")],
+                ["ZIP code", meta.get("zip") or "(none: default theaters)"], ["Theaters searched", meta.get("theatre_count")],
                 ["Days searched", meta.get("days")], ["Movies found", len(movies)],
                 ["Days with no showtimes yet", meta.get("empty_days", 0)], [], ["Theater", "Miles"]):
         ws.append(row)

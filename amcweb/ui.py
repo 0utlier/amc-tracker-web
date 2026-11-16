@@ -8,12 +8,19 @@ from itertools import groupby
 import pandas as pd
 import streamlit as st
 
-from . import amc, exports, snapshot
+from . import amc, exports, report, snapshot
 from .config import secret, truthy
 from .datefmt import compact, month_label, parse, to_date
 from .store import LocalStore, SupabaseStore
 
 SECTIONS = ["Home", "Tracker", "Settings", "History"]
+DEFAULT_SLUGS = ["amc-river-east-21", "amc-roosevelt-collection-16",
+                 "amc-newcity-14", "amc-village-crossing-18"]
+
+
+def default_slugs():
+    raw = secret("DEFAULT_THEATRE_SLUGS", "")
+    return [x.strip() for x in str(raw).split(",") if x.strip()] or DEFAULT_SLUGS
 ICONS = {"Home": "🏠", "Tracker": "📋", "Settings": "⚙️", "History": "🕘"}
 BOOL_COLS = {
     "A-List Available": "alist_available",
@@ -39,6 +46,9 @@ CSS = """
 .pill { display: inline-block; font-size: .68rem; font-weight: 700; padding: 1px 7px;
   border-radius: 4px; background: #000; color: #fff; font-style: italic; letter-spacing: .1em; }
 .stButton > button, .stDownloadButton > button { min-height: 2.8rem; }
+[class*="st-key-reset_zone"] button { background: #b3261e !important; border-color: #b3261e !important;
+  color: #fff !important; }
+[class*="st-key-reset_zone"] button:hover { background: #d93025 !important; border-color: #d93025 !important; }
 .summary { display: flex; gap: .6rem; margin: .4rem 0 1rem; }
 .summary > div { flex: 1; background: #1e1e32; border: 1px solid rgba(255,255,255,.08);
   border-radius: 12px; padding: .7rem .5rem; text-align: center; }
@@ -150,15 +160,15 @@ def home(store, user):
     st.markdown(
         '<div class="summary"><div><b>{}</b><span>ZIP code</span></div>'
         '<div><b>{}</b><span>Theaters</span></div><div><b>{}</b><span>Days ahead</span></div></div>'
-        .format(user.get("zip") or "—", user["theatre_count"], user["days"]), unsafe_allow_html=True)
+        .format(user.get("zip") or "Default",
+                user["theatre_count"] if user.get("zip") else len(default_slugs()),
+                user["days"]), unsafe_allow_html=True)
     if not user.get("zip"):
-        st.caption("Set your ZIP code in Settings to start searching.")
+        st.caption("No ZIP set, so searches use the default theaters: River East, Roosevelt Collection, "
+                   "NewCity and Village Crossing.")
 
     if st.button("▶️  Run Using My Defaults", type="primary", width="stretch"):
-        if not user.get("zip"):
-            st.error("Set your ZIP code in Settings first.")
-        else:
-            run_search(store, user, user["zip"], user["theatre_count"], user["days"])
+        run_search(store, user, user.get("zip"), user["theatre_count"], user["days"])
     b1, b2 = st.columns(2)
     b1.button("⚙️  Change Search Settings", width="stretch", on_click=_go, args=("Settings",))
     b2.button("🕘  My Last 5 Runs", width="stretch", on_click=_go, args=("History",))
@@ -174,7 +184,14 @@ def run_search(store, user, zip_code, count, days):
     with st.status("Searching AMC…", expanded=True) as status:
         try:
             if demo_mode():
-                theatres = amc.demo_theatres(count)
+                theatres = amc.demo_theatres(count if zip_code else len(default_slugs()), not zip_code)
+            elif not zip_code:
+                st.write("🎬 Using the default theaters…")
+                theatres = amc.by_slugs(_all_theatres(secret("AMC_VENDOR_KEY")), default_slugs())
+                if not theatres:
+                    status.update(label="Couldn't find the default theaters on AMC", state="error")
+                    return
+                count = len(theatres)
             else:
                 st.write("📍 Finding theaters near {}…".format(zip_code))
                 lat, lon = _geocode(zip_code)
@@ -186,7 +203,8 @@ def run_search(store, user, zip_code, count, days):
                     status.update(label="No AMC theaters found near {}".format(zip_code), state="error")
                     return
             for t in theatres:
-                st.write("• {} — {:.1f} mi".format(t["name"], t["miles"]))
+                st.write("• {}{}".format(t["name"], "" if t.get("miles") is None
+                                          else " — {:.1f} mi".format(t["miles"])))
 
             bar = st.progress(0.0, text="Checking showtimes…")
             prog = lambda frac, msg: bar.progress(min(frac, 1.0), text=msg)
@@ -198,6 +216,7 @@ def run_search(store, user, zip_code, count, days):
             meta = {"run_at": datetime.now(timezone.utc).isoformat(), "zip": zip_code,
                     "theatre_count": count, "days": days, "theatres": theatres,
                     "empty_days": results["empty_days"]}
+            store.flag_new(user["slug"], results["movies"])
             st.write("📸 Saving screenshot & history…")
             png = snapshot.render(user["display_name"], meta, results["movies"], st.context.timezone)
             run_id = store.save_run(user["slug"], meta, results["movies"], png)
@@ -218,18 +237,21 @@ def render_run(store, user, run_id, key, show_shot=True):
         st.warning("That run is no longer saved.")
         return
     movies = sorted(movies, key=lambda m: (str(m["dates"][0]) if m["dates"] else "", m["title"].lower()))
-    st.markdown('<div class="muted">{} · ZIP {} · {} theaters · {} days · {} movies</div>'.format(
-        _when(meta["run_at"]), meta.get("zip") or "—", meta.get("theatre_count"),
-        meta.get("days"), len(movies)), unsafe_allow_html=True)
+    when = _when(meta["run_at"])
+    st.html(report.render_fragment(user["display_name"], meta, movies, prefix=key, when_text=when),
+            unsafe_allow_javascript=True)
 
     png = store.screenshot(meta.get("screenshot_path"))
     if show_shot and png:
         with st.expander("📸 Screenshot from this run", expanded=False):
             st.image(png, width="stretch")
 
+    st.markdown("**Download this run**")
     dl = st.container(horizontal=True)
     d1 = d2 = d3 = dl
     stamp = str(meta["run_at"])[:16].replace(":", "").replace("T", "_")
+    dl.download_button("🌐 Report (.html)", report.render_page(user["display_name"], meta, movies, when),
+                       "amc_report_{}.html".format(stamp), "text/html", key="{}_html".format(key))
     if png:
         d1.download_button("📸 Screenshot", png, "amc_run_{}.png".format(stamp), "image/png",
                            key="{}_png".format(key))
@@ -239,9 +261,12 @@ def render_run(store, user, run_id, key, show_shot=True):
                        "text/csv", key="{}_csv".format(key))
 
     if not movies:
-        st.info("No movies found in this search.")
         return
+    with st.expander("➕ Add movies from this run to the shared tracker", expanded=False):
+        _add_to_tracker(store, user, run_id, key, movies)
 
+
+def _add_to_tracker(store, user, run_id, key, movies):
     tracked = {m["amc_movie_id"]: m for m in store.list_tracker()}
     rows = []
     for m in movies:
@@ -275,21 +300,6 @@ def render_run(store, user, run_id, key, show_shot=True):
         st.session_state["run_ver"] = st.session_state.get("run_ver", 0) + 1
         st.toast("Added {} to the shared tracker".format(len(picked)), icon="✅")
         st.rerun()
-
-    with st.expander("🎟️ Showtimes by movie"):
-        title = st.selectbox("Movie", [m["title"] for m in movies], key="{}_pick".format(key))
-        m = next(x for x in movies if x["title"] == title)
-        if m.get("movie_url"):
-            st.markdown("[Open in AMC ↗]({})".format(m["movie_url"]))
-        for th in sorted((m.get("theatres") or {}).values(), key=lambda t: t["name"]):
-            st.markdown("**{}**".format(th["name"]))
-            lines = []
-            for d, shows in sorted(th["dates"].items()):
-                times = " · ".join(
-                    "[{}]({}){}".format(s["time"], s["url"], " ~~sold out~~" if s.get("sold_out") else "")
-                    if s.get("url") else s["time"] for s in shows)
-                lines.append("- {} — {}".format(to_date(d).strftime("%a %b %-d"), times))
-            st.markdown("\n".join(lines))
 
 
 # ── Shared tracker ────────────────────────────────────────────────────────────
@@ -415,25 +425,57 @@ def _load_saved(user):
     st.session_state["set_days"] = int(user["days"])
 
 
+def _clear_zip():
+    st.session_state["set_zip"] = ""
+
+
+@st.dialog("Reset everything for this person?")
+def _confirm_reset(store, user):
+    st.write("This permanently deletes **{}**'s last 5 runs and screenshots, forgets which movies "
+             "they've already seen (so everything shows as NEW again), and puts settings back to "
+             "the defaults: no ZIP (the 4 default theaters), 5 theaters, 90 days.".format(user["display_name"]))
+    st.caption("The shared tracker isn't touched.")
+    with st.container(key="reset_zone_confirm"):
+        if st.button("Yes, reset {}".format(user["display_name"]), width="stretch"):
+            store.reset_user(user["slug"])
+            for k in [k for k in st.session_state if k.startswith(("set_", "run_"))]:
+                del st.session_state[k]
+            st.session_state.pop("current_run", None)
+            st.session_state["just_reset"] = True
+            st.rerun()
+    if st.button("Cancel", width="stretch"):
+        st.rerun()
+
+
 def settings(store, user):
     st.title("⚙️ Search settings")
+    if st.session_state.pop("just_reset", False):
+        st.success("Reset done. Everything is back to the defaults.")
     if "set_zip" not in st.session_state:
         _load_saved(user)
 
-    st.text_input("ZIP code", key="set_zip", max_chars=5, placeholder="e.g. 60614")
-    st.number_input("Number of theaters", min_value=1, max_value=12, step=1, key="set_count")
-    st.number_input("Days to search", min_value=1, max_value=120, step=1, key="set_days")
-    st.caption("Saved defaults: ZIP {} · {} theaters · {} days".format(
-        user.get("zip") or "not set", user["theatre_count"], user["days"]))
-
     z = st.session_state["set_zip"].strip()
-    valid = bool(re.fullmatch(r"\d{5}", z))
-    if z and not valid:
-        st.error("ZIP code should be 5 digits.")
+    st.text_input("ZIP code", key="set_zip", max_chars=5,
+                  placeholder="Leave blank for the 4 default theaters")
+    if z:
+        st.button("✖ Remove ZIP (use default theaters)", on_click=_clear_zip)
+    else:
+        st.caption("No ZIP: searches River East 21, Roosevelt Collection 16, NewCity 14 and "
+                   "Village Crossing 18.")
+    st.number_input("Number of theaters", min_value=1, max_value=12, step=1, key="set_count",
+                    disabled=not z, help="Only used when a ZIP is set.")
+    st.number_input("Days to search", min_value=1, max_value=120, step=1, key="set_days")
+    st.caption("Saved defaults: {} · {} days".format(
+        "ZIP {} · {} theaters".format(user["zip"], user["theatre_count"]) if user.get("zip")
+        else "default 4 theaters", user["days"]))
+
+    valid = (not z) or bool(re.fullmatch(r"\d{5}", z))
+    if not valid:
+        st.error("ZIP code should be 5 digits, or leave it blank.")
 
     c1, c2 = st.columns(2)
     if c1.button("💾 Save My Defaults", type="primary", width="stretch", disabled=not valid):
-        store.save_prefs(user["slug"], z, st.session_state["set_count"], st.session_state["set_days"])
+        store.save_prefs(user["slug"], z or None, st.session_state["set_count"], st.session_state["set_days"])
         st.toast("Defaults saved", icon="✅")
         st.rerun()
     c2.button("↩️ Restore My Defaults", width="stretch", on_click=_load_saved, args=(user,))
@@ -441,9 +483,18 @@ def settings(store, user):
     st.divider()
     st.caption("Want a one-off search without changing your defaults?")
     if st.button("▶️ Run with these settings (don't save)", width="stretch", disabled=not valid):
-        run_search(store, user, z, int(st.session_state["set_count"]), int(st.session_state["set_days"]))
+        run_search(store, user, z or None, int(st.session_state["set_count"]),
+                   int(st.session_state["set_days"]))
     if st.session_state.get("current_run"):
         st.button("See results on Home →", on_click=_go, args=("Home",))
+
+    st.divider()
+    st.markdown("**Reset**")
+    st.caption("Deletes {}'s run history and puts every setting back to the defaults.".format(
+        user["display_name"]))
+    with st.container(key="reset_zone"):
+        if st.button("🗑️ Reset {} to defaults".format(user["display_name"]), width="stretch"):
+            _confirm_reset(store, user)
 
 
 # ── History ───────────────────────────────────────────────────────────────────
@@ -454,7 +505,7 @@ def history(store, user):
         st.info("No runs yet. Hit “Run Using My Defaults” on Home.")
         return
     labels = {r["id"]: "{}  ·  {} · {} theaters · {} days · {} movies".format(
-        _when(r["run_at"]), r.get("zip") or "—", r.get("theatre_count"), r.get("days"),
+        _when(r["run_at"]), ("ZIP " + r["zip"]) if r.get("zip") else "Default theaters", r.get("theatre_count"), r.get("days"),
         r.get("movie_count", 0)) for r in runs}
     run_id = st.radio("Run", list(labels), format_func=labels.get, key="run_hist_pick",
                       label_visibility="collapsed")

@@ -57,8 +57,9 @@ def render(user_name: str, meta: dict, movies: list[dict], tz: str | None = None
         when = dt.strftime("%b %-d, %Y %-I:%M %p")
     except Exception:
         when = str(meta.get("run_at", ""))[:16]
-    sub = "ZIP {} · {} theaters · {} days · {} movies · {}".format(
-        meta.get("zip") or "—", meta.get("theatre_count"), meta.get("days"), len(movies), when)
+    where = "ZIP {}".format(meta["zip"]) if meta.get("zip") else "Default theaters"
+    sub = "{} · {} theaters · {} days · {} movies · {}".format(
+        where, len(theatres) or meta.get("theatre_count"), meta.get("days"), len(movies), when)
     d.text((PAD, y), sub, font=f_sub, fill=MUTED)
     y += 40
 
