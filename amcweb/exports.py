@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import datetime
+from datetime import date, datetime
 from itertools import groupby
 
 from openpyxl import Workbook
@@ -27,6 +27,26 @@ def month_key(m):
     return (d.year, d.month) if d else (9999, 12)
 
 
+ARCHIVE = (0, 0)  # "header" for the Archived section: every date shows its month
+
+
+def tracker_groups(movies, today=None):
+    """
+    [(label, header, rows)] in display order: months (by first date), then "No dates",
+    then "Archived" — movies whose last date has passed (most recently finished first).
+    """
+    today = today or date.today()
+    live = [m for m in movies if not m["dates"] or max(m["dates"]) >= today]
+    done = sorted((m for m in movies if m["dates"] and max(m["dates"]) < today),
+                  key=lambda m: (max(m["dates"]), m["title"].lower()), reverse=True)
+    out = []
+    for key, group in groupby(sort_tracker(live), key=month_key):
+        out.append((month_label(*key) if key[0] != 9999 else "No dates", key, list(group)))
+    if done:
+        out.append(("Archived", ARCHIVE, done))
+    return out
+
+
 def sort_tracker(movies):
     return sorted(movies, key=lambda m: (m["dates"][0] if m["dates"] else to_date("9999-12-31"),
                                          m["title"].lower()))
@@ -45,14 +65,13 @@ def _style_header(ws, row=1):
         c.alignment = Alignment(vertical="center")
 
 
-def tracker_xlsx(movies) -> bytes:
+def tracker_xlsx(movies, today=None) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Tracker"
     ws.append(TRACKER_HEADERS)
     _style_header(ws)
-    for key, group in groupby(sort_tracker(movies), key=month_key):
-        label = month_label(*key) if key[0] != 9999 else "No dates"
+    for label, key, group in tracker_groups(movies, today):
         ws.append([label])
         r = ws.max_row
         ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=len(TRACKER_HEADERS))
@@ -79,15 +98,14 @@ def tracker_xlsx(movies) -> bytes:
     return buf.getvalue()
 
 
-def tracker_csv(movies) -> bytes:
+def tracker_csv(movies, today=None) -> bytes:
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["MONTH", *TRACKER_HEADERS, "ALL DATES", "AMC LINK"])
-    for m in sort_tracker(movies):
-        key = month_key(m)
-        label = month_label(*key) if key[0] != 9999 else ""
-        w.writerow([label, *_tracker_row(m, key),
-                    " ".join(str(d) for d in m["dates"]), m.get("movie_url") or ""])
+    for label, key, group in tracker_groups(movies, today):
+        for m in group:
+            w.writerow([label if label != "No dates" else "", *_tracker_row(m, key),
+                        " ".join(str(d) for d in m["dates"]), m.get("movie_url") or ""])
     return buf.getvalue().encode("utf-8-sig")  # BOM so Excel opens it cleanly
 
 

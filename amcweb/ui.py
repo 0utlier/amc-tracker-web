@@ -46,6 +46,7 @@ CSS = """
 .month-h { font-size: .8rem; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
   color: #00d4a8; margin: 1.6rem 0 .4rem; border-bottom: 1px solid rgba(255,255,255,.08);
   padding-bottom: .3rem; }
+.month-h.archived { color: #c5c5d4; margin-top: 2.6rem; }
 .muted { color: #c5c5d4; font-size: .85rem; }
 .pill { display: inline-block; font-size: .68rem; font-weight: 700; padding: 1px 7px;
   border-radius: 4px; background: #000; color: #fff; font-style: italic; letter-spacing: .1em; }
@@ -286,6 +287,19 @@ def _blip(title, action, extra=""):
     return "  \n".join(lines)
 
 
+def _today():
+    """Today in the viewer's time zone (falls back to the server's)."""
+    from datetime import date as _date, datetime as _dt
+    try:
+        tz = st.context.timezone
+        if tz:
+            from zoneinfo import ZoneInfo
+            return _dt.now(ZoneInfo(tz)).date()
+    except Exception:
+        pass
+    return _date.today()
+
+
 def _go_to_tracker():
     st.session_state["section"] = "Tracker"
 
@@ -489,11 +503,12 @@ def render_run(store, user, run_id, key, show_shot=True, toolbar=None):
 
 
 # ── Shared tracker ────────────────────────────────────────────────────────────
-def _tracker_changed(store, ed_key, ids, header):
+def _tracker_changed(store, ed_key, ids, headers):
     changes = st.session_state[ed_key].get("edited_rows", {})
     saved = 0
     for idx, change in changes.items():
         movie_id = ids[int(idx)]
+        header = headers[int(idx)]
         fields = {}
         for col, val in change.items():
             if col == "DATE":
@@ -532,10 +547,11 @@ def tracker(store, user):
                                  default="Table",
                                  label_visibility="collapsed") or "Table"
     bar.button("🔄", help="Refresh to see everyone's latest changes")
+    today = _today()
     with bar.popover("⬇️ Export"):
-        st.download_button("📊 Excel (.xlsx)", lambda: exports.tracker_xlsx(movies), "amc_tracker.xlsx",
+        st.download_button("📊 Excel (.xlsx)", lambda: exports.tracker_xlsx(movies, today), "amc_tracker.xlsx",
                            width="stretch", on_click="ignore")
-        st.download_button("📄 CSV (.csv)", lambda: exports.tracker_csv(movies), "amc_tracker.csv",
+        st.download_button("📄 CSV (.csv)", lambda: exports.tracker_csv(movies, today), "amc_tracker.csv",
                            "text/csv", width="stretch", on_click="ignore")
 
     if not movies:
@@ -550,10 +566,13 @@ def tracker(store, user):
                "(add a month for others: 28-31, Jan 1-3).")
 
     ver = st.session_state.get("trk_ver", 0)
-    for key, group in groupby(movies, key=exports.month_key):
-        group = list(group)
-        label = month_label(*key) if key[0] != 9999 else "No dates"
-        st.markdown('<div class="month-h">{}</div>'.format(label), unsafe_allow_html=True)
+    for label, key, group in exports.tracker_groups(movies, today):
+        archived = key == exports.ARCHIVE
+        if archived:
+            st.markdown('<div class="month-h archived">🗄️ Archived · {} movie{} whose last date has passed</div>'
+                        .format(len(group), "" if len(group) == 1 else "s"), unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="month-h">{}</div>'.format(label), unsafe_allow_html=True)
         if view == "Table":
             _month_table(store, key, group, ver)
         else:
@@ -617,10 +636,13 @@ def _month_table(store, header, group, ver):
         "NOTES": m.get("notes") or "",
     } for m in group])
     ed_key = "trk_{}_{}_{}".format(header[0], header[1], ver)
+    # Typed dates are read relative to the row's own first month (matters in Archived).
+    parse_headers = [header if header != exports.ARCHIVE or not m["dates"]
+                     else (m["dates"][0].year, m["dates"][0].month) for m in group]
     st.data_editor(
         df, key=ed_key, hide_index=True, width="stretch", num_rows="fixed", disabled=["MOVIE"],
         height=36 * (len(df) + 1) + 4,
-        on_change=_tracker_changed, args=(store, ed_key, [m["id"] for m in group], header),
+        on_change=_tracker_changed, args=(store, ed_key, [m["id"] for m in group], parse_headers),
         column_config={
             "DATE": st.column_config.TextColumn("DATE", width=140),
             "MOVIE": st.column_config.LinkColumn("MOVIE", width=190, display_text=r"#(.*)$",
