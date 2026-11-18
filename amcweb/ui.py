@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 
 from . import amc, exports, report, snapshot
+from .store import location_label, location_of
 from .config import secret, truthy
 from .datefmt import compact, month_label, parse, to_date
 
@@ -147,9 +148,9 @@ export default function (component) {
     return list.length < 2 ? list.join('') : list.slice(0, -1).join(', ') + ' & ' + list[list.length - 1];
   }
 
-  function paintTags(root, tracked, colors) {
+  function paintTags(root, tracked, colors, me) {
     root.querySelectorAll('.who-tags[data-mid]').forEach(function (box) {
-      var users = tracked[box.dataset.mid] || [];
+      var users = (tracked[box.dataset.mid] || []).filter(function (u) { return u !== me; });
       var key = users.join('|');
       if (box.__key === key) return;
       box.__key = key;
@@ -166,7 +167,7 @@ export default function (component) {
   }
   function applyState(box) {
     const tracked = (box.__data && box.__data.tracked) || {}, me = box.__data && box.__data.me;
-    paintTags(box, tracked, box.__data && box.__data.colors);
+    paintTags(box, tracked, box.__data && box.__data.colors, me);
     box.querySelectorAll('.list-btn[data-mid]').forEach(function (b) {
       const users = tracked[b.dataset.mid] || [];
       const mine = users.indexOf(me) >= 0;
@@ -390,27 +391,60 @@ def user_page(slug):
 
 
 # ── Home ──────────────────────────────────────────────────────────────────────
+def _places(store, slug):
+    """Places this person has searched, most recent first: 'default' and/or ZIP codes."""
+    out = []
+    for r in store.list_runs(slug):
+        loc = location_of(r.get("zip"))
+        if loc not in out:
+            out.append(loc)
+    return out
+
+
+def _switch_place(store, slug, key):
+    latest = store.list_runs(slug, st.session_state[key])[:1]
+    if latest:
+        st.session_state["current_run"] = latest[0]["id"]
+
+
 def home(store, user):
+    slug = user["slug"]
     if not st.session_state.get("current_run"):
-        # Coming back to the site: show the latest saved run, just as it looked when it finished.
-        latest = store.list_runs(user["slug"])[:1]
+        # Coming back to the site: show the latest run for the saved setting (its own track),
+        # or the latest run anywhere if that place hasn't been searched yet.
+        latest = store.list_runs(slug, location_of(user.get("zip")))[:1] or store.list_runs(slug)[:1]
         if latest:
             st.session_state["current_run"] = latest[0]["id"]
-    if st.session_state.get("current_run"):
+    run_id = st.session_state.get("current_run")
+    meta = _cached_run(store, run_id, store.kind)[0] if run_id else None
+    if run_id and not meta:  # that run was deleted (e.g. pruned)
+        st.session_state.pop("current_run", None)
+        _cached_run.clear()
+        st.rerun()
+    if meta:
         # Results showing: one slim line, so the report starts near the top of the page.
+        loc = location_of(meta.get("zip"))
+        days = meta.get("days") or user["days"]
         bar = st.container(horizontal=True, vertical_alignment="center", key="results_bar")
-        where = "ZIP {}".format(user["zip"]) if user.get("zip") else "Default theaters"
         phone = _is_phone()
-        if phone:
-            where = "ZIP {}".format(user["zip"]) if user.get("zip") else "Default"
-            bar.markdown("**{}** · {} · {}d".format(user["display_name"], where, user["days"]))
+        bar.markdown("**{}**".format(user["display_name"]) if phone
+                     else "**Hi, {}**".format(user["display_name"]))
+        places = _places(store, slug)
+        if len(places) > 1:  # switch between the places you've searched
+            pkey = "home_place_{}".format(run_id)
+            bar.selectbox("Place", places, index=places.index(loc) if loc in places else 0,
+                          format_func=location_label, key=pkey, label_visibility="collapsed",
+                          width=170 if phone else 210, on_change=_switch_place, args=(store, slug, pkey))
         else:
-            bar.markdown("**Hi, {}** &nbsp;·&nbsp; {} · {} days".format(user["display_name"], where, user["days"]))
-        if bar.button("▶️" if phone else "▶️ Run again", type="primary", help="Run again"):
-            if run_search(store, user, user.get("zip"), user["theatre_count"], user["days"]):
+            bar.markdown(location_label(loc))
+        bar.markdown("{}d".format(days) if phone else "{} days".format(days))
+        if bar.button("▶️" if phone else "▶️ Run again", type="primary",
+                      help="Search {} again".format(location_label(loc))):
+            count = meta.get("theatre_count") or user["theatre_count"]
+            if run_search(store, user, meta.get("zip"), count, days):
                 st.rerun()
             return
-        render_run(store, user, st.session_state["current_run"], key="home", show_shot=False, toolbar=bar)
+        render_run(store, user, run_id, key="home", show_shot=False, toolbar=bar)
         return
 
     st.title("Hi, {} 👋".format(user["display_name"]))
@@ -470,7 +504,7 @@ def run_search(store, user, zip_code, count, days):
             meta = {"run_at": datetime.now(timezone.utc).isoformat(), "zip": zip_code,
                     "theatre_count": count, "days": days, "theatres": theatres,
                     "empty_days": results["empty_days"]}
-            store.flag_new(user["slug"], results["movies"])
+            store.flag_new(user["slug"], results["movies"], location_of(zip_code))
             st.write("📸 Saving screenshot & history…")
             png = snapshot.render(user["display_name"], meta, results["movies"], st.context.timezone)
             run_id = store.save_run(user["slug"], meta, results["movies"], png)
@@ -815,17 +849,23 @@ def settings(store, user):
 
 # ── History ───────────────────────────────────────────────────────────────────
 def history(store, user):
-    runs = store.list_runs(user["slug"])
-    if not runs:
+    places = _places(store, user["slug"])
+    if not places:
         st.info("No runs yet. Hit “Run Using My Defaults” on Home.")
         return
-    labels = {r["id"]: "{}  ·  {} · {} theaters · {} days · {} movies".format(
-        _when(r["run_at"]), ("ZIP " + r["zip"]) if r.get("zip") else "Default theaters", r.get("theatre_count"), r.get("days"),
-        r.get("movie_count", 0)) for r in runs}
     phone = _is_phone()
-    if phone:  # short labels so the picker and download menu share one line
-        labels = {r["id"]: "{} · {} movies".format(_when(r["run_at"]), r.get("movie_count", 0)) for r in runs}
     bar = st.container(horizontal=True, vertical_alignment="center", key="results_bar_hist")
-    run_id = bar.selectbox("Run", list(labels), format_func=labels.get, key="run_hist_pick",
-                           label_visibility="collapsed", width=270 if phone else 430)
+    if len(places) > 1:  # each place keeps its own last 5 runs
+        loc = bar.selectbox("Place", places, format_func=location_label, key="hist_place",
+                            label_visibility="collapsed", width=150 if phone else 210)
+    else:
+        loc = places[0]
+    runs = store.list_runs(user["slug"], loc)
+    if phone:  # short labels so the pickers and download menu fit
+        labels = {r["id"]: "{} · {} movies".format(_when(r["run_at"]), r.get("movie_count", 0)) for r in runs}
+    else:
+        labels = {r["id"]: "{}  ·  {} theaters · {} days · {} movies".format(
+            _when(r["run_at"]), r.get("theatre_count"), r.get("days"), r.get("movie_count", 0)) for r in runs}
+    run_id = bar.selectbox("Run", list(labels), format_func=labels.get, key="run_hist_pick_{}".format(loc),
+                           label_visibility="collapsed", width=230 if phone else 420)
     render_run(store, user, run_id, key="hist", show_shot=True, toolbar=bar)

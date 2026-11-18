@@ -404,9 +404,9 @@ FRAME_JS = """
     return list.length < 2 ? list.join('') : list.slice(0, -1).join(', ') + ' & ' + list[list.length - 1];
   }
 
-  function paintTags(root, tracked, colors) {
+  function paintTags(root, tracked, colors, me) {
     root.querySelectorAll('.who-tags[data-mid]').forEach(function (box) {
-      var users = tracked[box.dataset.mid] || [];
+      var users = (tracked[box.dataset.mid] || []).filter(function (u) { return u !== me; });
       var key = users.join('|');
       if (box.__key === key) return;
       box.__key = key;
@@ -423,7 +423,7 @@ FRAME_JS = """
   }
   window.__amcrApply = function (state) {
     var tracked = (state && state.tracked) || {}, me = state && state.me;
-    paintTags(document, tracked, state && state.colors);
+    paintTags(document, tracked, state && state.colors, me);
     document.querySelectorAll('.list-btn[data-mid]').forEach(function (b) {
       var users = tracked[b.dataset.mid] || [];
       var mine = users.indexOf(me) >= 0;

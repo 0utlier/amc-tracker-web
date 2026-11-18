@@ -17,7 +17,20 @@ from pathlib import Path
 
 from .datefmt import to_date
 
-KEEP_RUNS = 5
+KEEP_RUNS = 5  # per person, per place searched
+
+
+def location_of(zip_code) -> str:
+    """Each place searched is its own track: a ZIP code, or 'default' for the 4 default theaters."""
+    return str(zip_code).strip() if zip_code else "default"
+
+
+def location_label(loc) -> str:
+    return "Default theaters" if loc in (None, "", "default") else "ZIP {}".format(loc)
+
+
+def _same_place(run, loc) -> bool:
+    return location_of(run.get("zip")) == loc
 DEFAULT_PREFS = {"zip": None, "theatre_count": 5, "days": 90}
 DEFAULT_DISPLAY = {"show_times": False}
 CARD_FIELDS = ("poster", "rating", "runtime", "genre")
@@ -178,13 +191,13 @@ class SupabaseStore:
         } for m in movies]
         for i in range(0, len(rows), 200):
             self.db.table("run_results").insert(rows[i:i + 200]).execute()
-        self._prune(user["id"])
+        self._prune(user["id"], location_of(meta.get("zip")))
         return run_id
 
-    def _prune(self, user_id):
-        runs = (self.db.table("runs").select("id, screenshot_path").eq("user_id", user_id)
+    def _prune(self, user_id, loc):
+        runs = (self.db.table("runs").select("id, zip, screenshot_path").eq("user_id", user_id)
                 .order("run_at", desc=True).execute().data)
-        old = runs[KEEP_RUNS:]
+        old = [r for r in runs if _same_place(r, loc)][KEEP_RUNS:]
         if not old:
             return
         paths = [r["screenshot_path"] for r in old if r.get("screenshot_path")]
@@ -195,23 +208,24 @@ class SupabaseStore:
                 pass  # a leftover image is harmless; don't fail the run over it
         self.db.table("runs").delete().in_("id", [r["id"] for r in old]).execute()
 
-    def flag_new(self, slug, movies):
-        """Mark movies this person has never seen before (m['is_new']) and remember them."""
+    def flag_new(self, slug, movies, loc="default"):
+        """Mark movies this person hasn't seen before at this place (m['is_new']) and remember them."""
         user = self.get_user(slug)
         ids = [m["amc_movie_id"] for m in movies if m.get("amc_movie_id")]
         seen = set()
         for i in range(0, len(ids), 150):
             rows = (self.db.table("seen_movies").select("amc_movie_id").eq("user_id", user["id"])
-                    .in_("amc_movie_id", ids[i:i + 150]).execute().data)
+                    .eq("location", loc).in_("amc_movie_id", ids[i:i + 150]).execute().data)
             seen.update(r["amc_movie_id"] for r in rows)
         fresh = []
         for m in movies:
             m["is_new"] = m.get("amc_movie_id") not in seen
             if m["is_new"]:
-                fresh.append({"user_id": user["id"], "amc_movie_id": m["amc_movie_id"], "title": m["title"]})
+                fresh.append({"user_id": user["id"], "location": loc,
+                              "amc_movie_id": m["amc_movie_id"], "title": m["title"]})
         for i in range(0, len(fresh), 200):
             self.db.table("seen_movies").upsert(
-                fresh[i:i + 200], on_conflict="user_id,amc_movie_id", ignore_duplicates=True).execute()
+                fresh[i:i + 200], on_conflict="user_id,location,amc_movie_id", ignore_duplicates=True).execute()
         return movies
 
     def reset_user(self, slug):
@@ -235,12 +249,14 @@ class SupabaseStore:
     def set_show_times(self, slug, on):
         self.db.table("users").update({"show_times": bool(on)}).eq("slug", slug).execute()
 
-    def list_runs(self, slug):
+    def list_runs(self, slug, loc=None):
+        """Newest first. loc=None: every place; otherwise just that place's last 5."""
         user = self.get_user(slug)
         if not user:
             return []
-        return (self.db.table("runs").select("*").eq("user_id", user["id"])
-                .order("run_at", desc=True).limit(KEEP_RUNS).execute().data)
+        runs = (self.db.table("runs").select("*").eq("user_id", user["id"])
+                .order("run_at", desc=True).execute().data)
+        return runs if loc is None else [r for r in runs if _same_place(r, loc)][:KEEP_RUNS]
 
     def get_run(self, run_id):
         meta = self.db.table("runs").select("*").eq("id", run_id).limit(1).execute().data
@@ -404,7 +420,8 @@ class LocalStore:
             for m in movies:
                 data["run_results"].append({**m, "run_id": run_id,
                                             "dates": [str(d) for d in m["dates"]]})
-            mine = sorted((r for r in data["runs"] if r["user_id"] == user["id"]),
+            loc = location_of(meta.get("zip"))
+            mine = sorted((r for r in data["runs"] if r["user_id"] == user["id"] and _same_place(r, loc)),
                           key=lambda r: r["run_at"], reverse=True)
             drop = {r["id"] for r in mine[KEEP_RUNS:]}
             for r in mine[KEEP_RUNS:]:
@@ -415,14 +432,15 @@ class LocalStore:
             self._write(data)
             return run_id
 
-    def flag_new(self, slug, movies):
+    def flag_new(self, slug, movies, loc="default"):
+        key = "{}|{}".format(slug, loc)
         with self._lock:
             data = self._read()
-            seen = set(data.setdefault("seen", {}).get(slug, []))
+            seen = set(data.setdefault("seen", {}).get(key, []))
             for m in movies:
                 m["is_new"] = m.get("amc_movie_id") not in seen
                 seen.add(m.get("amc_movie_id"))
-            data["seen"][slug] = sorted(x for x in seen if x is not None)
+            data["seen"][key] = sorted(x for x in seen if x is not None)
             self._write(data)
         return movies
 
@@ -437,15 +455,17 @@ class LocalStore:
                     (self.folder / "screenshots" / r["screenshot_path"]).unlink(missing_ok=True)
             data["runs"] = [r for r in data["runs"] if r["id"] not in mine]
             data["run_results"] = [r for r in data["run_results"] if r["run_id"] not in mine]
-            data.setdefault("seen", {}).pop(slug, None)
+            data["seen"] = {k: v for k, v in data.setdefault("seen", {}).items()
+                            if k != slug and not k.startswith(slug + "|")}
             self._write(data)
 
-    def list_runs(self, slug):
+    def list_runs(self, slug, loc=None):
         user = self.get_user(slug)
         if not user:
             return []
-        runs = [r for r in self._read()["runs"] if r["user_id"] == user["id"]]
-        return sorted(runs, key=lambda r: r["run_at"], reverse=True)[:KEEP_RUNS]
+        runs = sorted((r for r in self._read()["runs"] if r["user_id"] == user["id"]),
+                      key=lambda r: r["run_at"], reverse=True)
+        return runs if loc is None else [r for r in runs if _same_place(r, loc)][:KEEP_RUNS]
 
     def get_run(self, run_id):
         data = self._read()
