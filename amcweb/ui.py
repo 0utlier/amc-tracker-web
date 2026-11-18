@@ -21,9 +21,12 @@ def default_slugs():
     raw = secret("DEFAULT_THEATRE_SLUGS", "")
     return [x.strip() for x in str(raw).split(",") if x.strip()] or DEFAULT_SLUGS
 ICONS = {"Home": "🏠", "Tracker": "📋", "Settings": "⚙️", "History": "🕘"}
+BLANK = " "  # how an empty choice shows in the table (the grid draws a truly empty value as "None")
+CHOICE_COLS = {  # column -> (field, options); blank is always allowed
+    "A-List Available": ("alist_available", ["YES", "NO"]),
+    "Jonathan Purchased": ("jonathan_purchased", ["NEEDS Purchase", "x"]),
+}
 BOOL_COLS = {
-    "A-List Available": "alist_available",
-    "Jonathan Purchased": "jonathan_purchased",
     "NEEDS REFUND": "needs_refund",
     "NEEDS ALTERNATIVE": "needs_alternative",
 }
@@ -101,7 +104,7 @@ REPORT_JS = r"""
 export default function (component) {
   const { data, setTriggerValue, parentElement } = component;
   window.__amcrSend = setTriggerValue;
-  window.__amcrState = { tracked: data.tracked, me: data.me };
+  window.__amcrState = { tracked: data.tracked, me: data.me, colors: data.colors };
   let fr = parentElement.querySelector(':scope > iframe.amcr-frame');
   if (!fr) {
     fr = document.createElement('iframe');
@@ -143,8 +146,27 @@ export default function (component) {
   function names(list) {
     return list.length < 2 ? list.join('') : list.slice(0, -1).join(', ') + ' & ' + list[list.length - 1];
   }
+
+  function paintTags(root, tracked, colors) {
+    root.querySelectorAll('.who-tags[data-mid]').forEach(function (box) {
+      var users = tracked[box.dataset.mid] || [];
+      var key = users.join('|');
+      if (box.__key === key) return;
+      box.__key = key;
+      box.textContent = '';
+      users.forEach(function (u) {
+        var t = document.createElement('span');
+        t.className = 'utag';
+        t.textContent = (u || '?').charAt(0).toUpperCase();
+        t.title = u + ' added this';
+        t.style.background = (colors && colors[u]) || '#9ca3af';
+        box.appendChild(t);
+      });
+    });
+  }
   function applyState(box) {
     const tracked = (box.__data && box.__data.tracked) || {}, me = box.__data && box.__data.me;
+    paintTags(box, tracked, box.__data && box.__data.colors);
     box.querySelectorAll('.list-btn[data-mid]').forEach(function (b) {
       const users = tracked[b.dataset.mid] || [];
       const mine = users.indexOf(me) >= 0;
@@ -285,6 +307,20 @@ def _blip(title, action, extra=""):
     """Toast text: movie title, then what happened, then who else (each on its own line)."""
     lines = ["**{}**".format(title.replace("*", "\\*")), action] + ([extra] if extra else [])
     return "  \n".join(lines)
+
+
+USER_COLORS = ["#38bdf8", "#f472b6", "#facc15", "#a3e635", "#fb923c", "#c084fc", "#2dd4bf", "#f87171"]
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _user_colors_cached(kind, names):
+    return {n: USER_COLORS[i % len(USER_COLORS)] for i, n in enumerate(names)}
+
+
+def _user_colors(store):
+    """Each person's letter color on the posters (same order as they were added: JD, Meagan, Kevin…)."""
+    names = tuple(u["display_name"] for u in store.list_users())
+    return _user_colors_cached(store.kind, names)
 
 
 def _today():
@@ -483,7 +519,8 @@ def render_run(store, user, run_id, key, show_shot=True, toolbar=None):
     html = _report_html(user["display_name"], run_id, show_times, when, phone, meta, movies)
     res = (_inline_component if phone else _report_component)(
                             key="report_{}_{}".format(key, "phone" if phone else "desk"),
-                            data={"html": html, "tracked": tracked, "me": user["display_name"]},
+                            data={"html": html, "tracked": tracked, "me": user["display_name"],
+                                  "colors": _user_colors(store)},
                             on_toggle_change=lambda: None, on_goto_change=_go_to_tracker)
     if res and res.toggle:
         action, mid = res.toggle.split(":")[:2]
@@ -523,6 +560,8 @@ def _tracker_changed(store, ed_key, ids, headers):
                 fields["users"] = [u.strip() for u in (val or "").split(",") if u.strip()]
             elif col == "NOTES":
                 fields["notes"] = val or ""
+            elif col in CHOICE_COLS:
+                fields[CHOICE_COLS[col][0]] = (val or "").strip()
             elif col in BOOL_COLS:
                 fields[BOOL_COLS[col]] = bool(val)
         if fields:
@@ -534,7 +573,8 @@ def _tracker_changed(store, ed_key, ids, headers):
 
 
 def _card_changed(store, movie_id, field, wkey):
-    store.update_movie(movie_id, {field: st.session_state[wkey]})
+    val = st.session_state[wkey]
+    store.update_movie(movie_id, {field: ("" if val is None else val)})
     st.toast("Saved", icon="✅")
 
 
@@ -632,6 +672,7 @@ def _month_table(store, header, group, ver):
         "DATE": compact(m["dates"], header) if m["dates"] else "",
         "MOVIE": "{}#{}".format(m.get("movie_url") or "https://www.amctheatres.com/movies", m["title"]),
         "USER": ", ".join(m["users"]),
+        **{col: (m.get(field) or BLANK) for col, (field, _) in CHOICE_COLS.items()},
         **{col: bool(m[field]) for col, field in BOOL_COLS.items()},
         "NOTES": m.get("notes") or "",
     } for m in group])
@@ -648,6 +689,9 @@ def _month_table(store, header, group, ver):
             "MOVIE": st.column_config.LinkColumn("MOVIE", width=190, display_text=r"#(.*)$",
                                                  help="Opens the movie on AMC"),
             "USER": st.column_config.TextColumn("USER", width=110),
+            **{c: st.column_config.SelectboxColumn(c, options=[*opts, BLANK], required=True, width=150,
+                                                   help="Pick one, or the empty choice to leave it blank")
+               for c, (_, opts) in CHOICE_COLS.items()},
             **{c: st.column_config.CheckboxColumn(c, width=128) for c in BOOL_COLS},
             "NOTES": st.column_config.TextColumn("NOTES", width=210),
         },
@@ -660,6 +704,11 @@ def _movie_card(store, header, m, ver):
         st.markdown("**{}**".format(title))
         st.markdown('<div class="muted">📅 {} &nbsp;·&nbsp; 👤 {}</div>'.format(
             compact(m["dates"], header) or "—", ", ".join(m["users"]) or "—"), unsafe_allow_html=True)
+        for label, (field, opts) in CHOICE_COLS.items():
+            wkey = "trk_c_{}_{}_{}".format(m["id"], field, ver)
+            st.segmented_control(label, opts, default=m.get(field) or None, key=wkey,
+                                 on_change=_card_changed, args=(store, m["id"], field, wkey),
+                                 help="Tap the selected one again to clear it")
         for label, field in BOOL_COLS.items():
             wkey = "trk_c_{}_{}_{}".format(m["id"], field, ver)
             st.checkbox(label, value=bool(m[field]), key=wkey,

@@ -54,7 +54,7 @@ def sort_tracker(movies):
 
 def _tracker_row(m, header):
     return [compact(m["dates"], header) if m["dates"] else "", m["title"], ", ".join(m["users"]),
-            _yn(m["alist_available"]), _yn(m["jonathan_purchased"]), _yn(m["needs_refund"]),
+            m.get("alist_available") or "", m.get("jonathan_purchased") or "", _yn(m["needs_refund"]),
             _yn(m["needs_alternative"]), m.get("notes") or ""]
 
 

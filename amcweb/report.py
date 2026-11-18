@@ -60,6 +60,11 @@ CSS = """
   justify-content:center;font-size:2rem;color:var(--muted)}
 .amcr .badge{position:absolute;top:8px;right:8px;background:var(--new);color:#002e27;font-size:.6rem;
   font-weight:700;padding:3px 8px;border-radius:20px;letter-spacing:.05em}
+.amcr .who-tags{position:absolute;top:8px;right:8px;display:flex;gap:4px;z-index:2}
+.amcr .card.isnew .who-tags{top:34px}
+.amcr .utag{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  font-size:.72rem;font-weight:800;color:#111;border:1.5px solid rgba(0,0,0,.45);
+  box-shadow:0 1px 3px rgba(0,0,0,.5);font-family:inherit;line-height:1}
 .amcr .theatre-dots{position:absolute;top:8px;left:8px;display:flex;gap:4px}
 .amcr .tdot{width:9px;height:9px;border-radius:50%;border:1.5px solid rgba(0,0,0,.4)}
 .amcr .info{padding:10px 12px;flex:1;display:flex;flex-direction:column;gap:4px}
@@ -295,13 +300,15 @@ def _card_and_modal(prefix, m, theatre_info, is_new, show_times=False, interacti
              td=total_dates, dpl="" if total_dates == 1 else "s", sections="".join(sections))
 
     card = (
-        '<div class="card{cls}" data-theatres="{tids}">{badge}{lo}{img}{lc}'
+        '<div class="card{cls}" data-theatres="{tids}">{badge}{tags}{lo}{img}{lc}'
         '<div class="theatre-dots">{dots}</div>'
         '<div class="info"><div class="title">{lo}{title}{lc}</div><div class="meta">{meta}</div>'
         '{imax}<div class="first-seen">First showing: {first}</div></div>'
         '<div class="card-foot"><button class="dates-btn" data-amcr-open="{sid}">&#128197; {td} date{dpl} '
         '&middot; {tc} theatre{tpl}<br><span>tap to expand &rsaquo;</span></button>{listbtn}</div></div>'
-    ).format(listbtn=_list_button(m, interactive),cls=" isnew" if is_new else "", tids=",".join(theatres.keys()),
+    ).format(listbtn=_list_button(m, interactive),
+             tags='<div class="who-tags" data-mid="{}"></div>'.format(m["amc_movie_id"])
+             if interactive and m.get("amc_movie_id") else "",cls=" isnew" if is_new else "", tids=",".join(theatres.keys()),
              badge='<span class="badge">NEW</span>' if is_new else "", lo=lo, lc=lc, img=img,
              dots=dots, title=title, meta=meta, imax=imax, first=first, sid=sid,
              td=total_dates, dpl="" if total_dates == 1 else "s", tc=tc, tpl="" if tc == 1 else "s")
@@ -396,8 +403,27 @@ FRAME_JS = """
   function names(list) {
     return list.length < 2 ? list.join('') : list.slice(0, -1).join(', ') + ' & ' + list[list.length - 1];
   }
+
+  function paintTags(root, tracked, colors) {
+    root.querySelectorAll('.who-tags[data-mid]').forEach(function (box) {
+      var users = tracked[box.dataset.mid] || [];
+      var key = users.join('|');
+      if (box.__key === key) return;
+      box.__key = key;
+      box.textContent = '';
+      users.forEach(function (u) {
+        var t = document.createElement('span');
+        t.className = 'utag';
+        t.textContent = (u || '?').charAt(0).toUpperCase();
+        t.title = u + ' added this';
+        t.style.background = (colors && colors[u]) || '#9ca3af';
+        box.appendChild(t);
+      });
+    });
+  }
   window.__amcrApply = function (state) {
     var tracked = (state && state.tracked) || {}, me = state && state.me;
+    paintTags(document, tracked, state && state.colors);
     document.querySelectorAll('.list-btn[data-mid]').forEach(function (b) {
       var users = tracked[b.dataset.mid] || [];
       var mine = users.indexOf(me) >= 0;

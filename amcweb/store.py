@@ -22,8 +22,22 @@ DEFAULT_PREFS = {"zip": None, "theatre_count": 5, "days": 90}
 DEFAULT_DISPLAY = {"show_times": False}
 CARD_FIELDS = ("poster", "rating", "runtime", "genre")
 BUCKET = "run-screenshots"
-BOOL_FIELDS = ("alist_available", "jonathan_purchased", "needs_refund", "needs_alternative")
-EDITABLE = {"title", "users", "notes", *BOOL_FIELDS}
+BOOL_FIELDS = ("needs_refund", "needs_alternative")
+# Pick-one columns: value is one of the options, or "" for blank
+CHOICE_FIELDS = {"alist_available": ("YES", "NO"), "jonathan_purchased": ("NEEDS Purchase", "x")}
+ROW_FIELDS = (*CHOICE_FIELDS, *BOOL_FIELDS)
+EDITABLE = {"title", "users", "notes", *ROW_FIELDS}
+
+
+def normalize_row(r):
+    """Old data stored the two choice columns as checkboxes: ticked -> YES / x, else blank."""
+    for f, opts in CHOICE_FIELDS.items():
+        v = r.get(f)
+        if v is True:
+            r[f] = opts[0] if f == "alist_available" else opts[1]
+        elif not v:
+            r[f] = ""
+    return r
 
 
 def short_theatre(name: str) -> str:
@@ -79,6 +93,7 @@ class SupabaseStore:
         for r in rows:
             r["dates"] = sorted(to_date(d["show_date"]) for d in r.pop("movie_dates", []) or [])
             r["users"] = r.get("users") or []
+            normalize_row(r)
         return rows
 
     def add_to_tracker(self, user_name, movie):
@@ -110,7 +125,7 @@ class SupabaseStore:
 
     def restore_movie(self, snap):
         """Put back a row removed from the tracker (Undo). Merges if it was re-added meanwhile."""
-        row = {k: snap.get(k) for k in ("amc_movie_id", "title", "users", "notes", "movie_url", *BOOL_FIELDS)}
+        row = {k: snap.get(k) for k in ("amc_movie_id", "title", "users", "notes", "movie_url", *ROW_FIELDS)}
         existing = []
         if snap.get("amc_movie_id") is not None:
             existing = (self.db.table("movies").select("id, users").eq("amc_movie_id", snap["amc_movie_id"])
@@ -119,7 +134,7 @@ class SupabaseStore:
             movie_id = existing[0]["id"]
             users = list(existing[0]["users"] or [])
             users += [u for u in snap.get("users") or [] if u not in users]
-            self.update_movie(movie_id, {**{k: row[k] for k in ("notes", *BOOL_FIELDS)}, "users": users})
+            self.update_movie(movie_id, {**{k: row[k] for k in ("notes", *ROW_FIELDS)}, "users": users})
         else:
             movie_id = self.db.table("movies").insert(row).execute().data[0]["id"]
         if snap.get("dates"):
@@ -301,6 +316,7 @@ class LocalStore:
         rows = self._read()["movies"]
         for r in rows:
             r["dates"] = sorted(to_date(d) for d in r["dates"])
+            normalize_row(r)
         return rows
 
     def add_to_tracker(self, user_name, movie):
@@ -311,7 +327,7 @@ class LocalStore:
                 row = {
                     "id": data["next_id"], "amc_movie_id": movie["amc_movie_id"],
                     "title": movie["title"], "users": [user_name],
-                    **{f: False for f in BOOL_FIELDS},
+                    **{f: False for f in BOOL_FIELDS}, **{f: "" for f in CHOICE_FIELDS},
                     "notes": movie_note(movie),
                     "movie_url": movie.get("movie_url"), "dates": [],
                 }
@@ -339,7 +355,7 @@ class LocalStore:
             data = self._read()
             row = next((m for m in data["movies"] if m["amc_movie_id"] == snap.get("amc_movie_id")), None)
             if row is None:
-                row = {k: snap.get(k) for k in ("amc_movie_id", "title", "users", "notes", "movie_url", *BOOL_FIELDS)}
+                row = {k: snap.get(k) for k in ("amc_movie_id", "title", "users", "notes", "movie_url", *ROW_FIELDS)}
                 row["id"] = data["next_id"]
                 data["next_id"] += 1
                 row["dates"] = []
